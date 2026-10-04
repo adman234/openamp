@@ -13,13 +13,34 @@ android {
         applicationId = "io.github.adman234.openamp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.0.1"
+        // CI numbers each build, so a newer build always installs over an older one.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.1.$build"
+    }
+
+    // CI signs with one fixed key so that builds update in place. Without the
+    // key, as on a developer machine, the default debug key is used.
+    val keystorePath = System.getenv("OPENAMP_KEYSTORE")
+    if (keystorePath != null) {
+        signingConfigs {
+            create("stable") {
+                storeFile = file(keystorePath)
+                storeType = "pkcs12"
+                storePassword = System.getenv("OPENAMP_KEYSTORE_PASSWORD")
+                keyAlias = "openamp"
+                keyPassword = System.getenv("OPENAMP_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("stable")
         }
     }
     compileOptions {
