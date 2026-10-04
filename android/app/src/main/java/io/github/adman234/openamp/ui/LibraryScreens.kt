@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -75,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import io.github.adman234.openamp.R
+import io.github.adman234.openamp.data.AlbumPlays
 import io.github.adman234.openamp.data.AlbumRef
 import io.github.adman234.openamp.data.LocalTrack
 import io.github.adman234.openamp.data.PlaylistRef
@@ -290,17 +292,17 @@ private fun AlbumCollection(vm: AppViewModel, albums: List<AlbumRef>, downloaded
     }
 }
 
-private data class ArtistEntry(val name: String, val thumb: String?, val albums: Int)
+private data class ArtistEntry(val name: String, val thumb: String?, val albums: Int, val addedAt: Long, val year: Int)
 
 @Composable
-private fun ArtistCollection(vm: AppViewModel, artists: List<ArtistEntry>, empty: String) {
+private fun ArtistCollection(vm: AppViewModel, artists: List<ArtistEntry>, letters: Boolean, empty: String) {
     if (artists.isEmpty()) {
         if (!vm.loading) Text(empty, Modifier.padding(16.dp))
         return
     }
     val scope = rememberCoroutineScope()
     Box(Modifier.fillMaxSize()) {
-        val showLetters = artists.size > 30
+        val showLetters = letters && artists.size > 30
         if (vm.grid) {
             val state = rememberLazyGridState()
             LazyVerticalGrid(
@@ -344,30 +346,81 @@ private fun ArtistCollection(vm: AppViewModel, artists: List<ArtistEntry>, empty
     }
 }
 
-/** Home: three rows of albums. The play history behind two of them is kept on the phone. */
-@Composable
-private fun Home(vm: AppViewModel, albums: List<AlbumRef>, local: List<LocalTrack>, downloadedIds: Set<String>) {
-    val plays by vm.history.collectAsState()
-    val byId = remember(albums, local) { (downloadedAlbums(local) + albums).associateBy { it.id } }
-    val added = remember(albums) { albums.filter { it.addedAt > 0 }.sortedByDescending { it.addedAt }.take(20) }
-    val recent = remember(plays, byId) { plays.sortedByDescending { it.last }.mapNotNull { byId[it.albumId] }.take(20) }
-    val most = remember(plays, byId) { plays.sortedByDescending { it.count }.mapNotNull { byId[it.albumId] }.take(20) }
+/** The albums behind one of the home screen's rows, in that row's own order. */
+private fun sectionAlbums(
+    mode: BrowseMode,
+    library: List<AlbumRef>,
+    local: List<LocalTrack>,
+    plays: List<AlbumPlays>,
+): List<AlbumRef> {
+    val downloaded = downloadedAlbums(local)
+    val byId = (downloaded + library).associateBy { it.id }
+    return when (mode) {
+        // The download records are in the order they were made, so the newest is last.
+        BrowseMode.Downloads -> downloaded.reversed().map { byId.getValue(it.id) }
+        BrowseMode.RecentlyAdded -> library.filter { it.addedAt > 0 }.sortedByDescending { it.addedAt }
+        BrowseMode.RecentlyPlayed -> plays.sortedByDescending { it.last }.mapNotNull { byId[it.albumId] }
+        BrowseMode.MostPlayed -> plays.sortedByDescending { it.count }.mapNotNull { byId[it.albumId] }
+        else -> emptyList()
+    }
+}
 
-    if (added.isEmpty() && recent.isEmpty() && most.isEmpty()) {
+private val homeRows = listOf(BrowseMode.Downloads, BrowseMode.RecentlyAdded, BrowseMode.RecentlyPlayed, BrowseMode.MostPlayed)
+
+/** Home: a row of albums per section. Each heading opens the whole section. */
+@Composable
+private fun Home(vm: AppViewModel, local: List<LocalTrack>, downloadedIds: Set<String>) {
+    val plays by vm.history.collectAsState()
+    val rows = remember(vm.albums, local, plays) {
+        homeRows.map { it to sectionAlbums(it, vm.albums, local, plays) }.filter { it.second.isNotEmpty() }
+    }
+    if (rows.isEmpty()) {
         if (!vm.loading) Text("Nothing here yet. Choose Albums from the menu above to start.", Modifier.padding(16.dp))
         return
     }
     LazyColumn(Modifier.fillMaxSize()) {
-        listOf("Recently played" to recent, "Listen again" to most, "Recently added" to added).forEach { (title, row) ->
-            if (row.isNotEmpty()) {
-                item(key = title) {
-                    Text(title, Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp), style = MaterialTheme.typography.titleMedium)
-                    LazyRow(contentPadding = PaddingValues(horizontal = 10.dp)) {
-                        items(row, key = { it.id }) { AlbumTile(vm, it, it.id in downloadedIds, Modifier.width(148.dp)) }
-                    }
-                }
+        items(rows, key = { it.first.name }) { (mode, albums) ->
+            Row(
+                Modifier.fillMaxWidth().clickable { vm.open(Screen.Section(mode)) }
+                    .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(mode.label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                Text("See all", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            LazyRow(contentPadding = PaddingValues(horizontal = 10.dp)) {
+                items(albums.take(20), key = { it.id }) { AlbumTile(vm, it, it.id in downloadedIds, Modifier.width(148.dp)) }
             }
         }
+    }
+}
+
+/** One section's albums in full, filtered by the search box and the downloaded-only checkbox. */
+@Composable
+private fun SectionCollection(vm: AppViewModel, mode: BrowseMode, local: List<LocalTrack>, downloadedIds: Set<String>, query: String) {
+    val plays by vm.history.collectAsState()
+    val shown = remember(mode, vm.albums, local, plays, vm.onlyDownloaded, query) {
+        sectionAlbums(mode, vm.albums, local, plays).filter {
+            (!vm.onlyDownloaded || it.id in downloadedIds) &&
+                (it.title.contains(query, true) || it.artist.contains(query, true))
+        }
+    }
+    AlbumCollection(vm, shown, downloadedIds, letters = false, empty = "Nothing to show here yet.")
+}
+
+@Composable
+fun SectionScreen(vm: AppViewModel, screen: Screen.Section) {
+    val local by vm.local.collectAsState()
+    val downloadedIds = remember(local) { local.mapTo(HashSet()) { it.albumId } }
+    Column(Modifier.fillMaxSize()) {
+        TopBar(vm, screen.mode.label) { GridToggle(vm) }
+        if (screen.mode != BrowseMode.Downloads) DownloadedOnlyCheckbox(vm, Modifier.padding(horizontal = 4.dp))
+        SectionCollection(vm, screen.mode, local, downloadedIds, "")
     }
 }
 
@@ -391,7 +444,7 @@ fun BrowseScreen(vm: AppViewModel) {
                     Icon(Icons.Default.ArrowDropDown, contentDescription = "Choose what to browse")
                 }
                 DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                    BrowseMode.entries.forEach { option ->
+                    vm.visibleModes.forEach { option ->
                         DropdownMenuItem(text = { Text(option.label) }, onClick = { vm.mode = option; modeMenu = false })
                     }
                 }
@@ -423,7 +476,7 @@ fun BrowseScreen(vm: AppViewModel) {
             )
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 DownloadedOnlyCheckbox(vm, Modifier.weight(1f))
-                if (vm.mode == BrowseMode.Albums) SortMenu(vm)
+                if (vm.mode == BrowseMode.Albums || vm.mode == BrowseMode.Artists) SortMenu(vm)
                 if (vm.mode != BrowseMode.Playlists) GridToggle(vm)
             }
         }
@@ -439,7 +492,7 @@ fun BrowseScreen(vm: AppViewModel) {
 
         val nothing = if (query.isNotEmpty()) "Nothing matches \"$query\"." else "Nothing to show here yet."
         when (vm.mode) {
-            BrowseMode.Home -> Home(vm, albums, local, downloadedIds)
+            BrowseMode.Home -> Home(vm, local, downloadedIds)
             BrowseMode.Albums -> {
                 val shown = remember(albums, query, vm.sort) {
                     sortAlbums(albums.filter { it.title.contains(query, true) || it.artist.contains(query, true) }, vm.sort)
@@ -447,13 +500,23 @@ fun BrowseScreen(vm: AppViewModel) {
                 AlbumCollection(vm, shown, downloadedIds, letters = vm.sort == SortBy.Title && query.isEmpty(), empty = nothing)
             }
             BrowseMode.Artists -> {
-                val artists = remember(albums, vm.artists, query) {
+                val artists = remember(albums, vm.artists, query, vm.sort) {
                     val photos = vm.artists.associate { it.name to it.thumb }
-                    albums.groupBy { it.artist }.filterKeys { it.isNotBlank() && it.contains(query, true) }
-                        .map { (name, list) -> ArtistEntry(name, photos[name], list.size) }.sortedBy { it.name.lowercase() }
+                    val all = albums.groupBy { it.artist }.filterKeys { it.isNotBlank() && it.contains(query, true) }
+                        .map { (name, list) ->
+                            ArtistEntry(name, photos[name], list.size, list.maxOf { it.addedAt }, list.maxOf { it.year ?: 0 })
+                        }
+                    // An artist is as recent as their newest album.
+                    when (vm.sort) {
+                        SortBy.Recent -> all.sortedByDescending { it.addedAt }
+                        SortBy.Year -> all.sortedWith(compareByDescending<ArtistEntry> { it.year }.thenBy { it.name.lowercase() })
+                        else -> all.sortedBy { it.name.lowercase() }
+                    }
                 }
-                ArtistCollection(vm, artists, nothing)
+                ArtistCollection(vm, artists, letters = vm.sort == SortBy.Title || vm.sort == SortBy.Artist, empty = nothing)
             }
+            BrowseMode.RecentlyPlayed, BrowseMode.MostPlayed, BrowseMode.Downloads, BrowseMode.RecentlyAdded ->
+                SectionCollection(vm, vm.mode, local, downloadedIds, query)
             BrowseMode.Playlists -> {
                 val playlists = remember(vm.playlists, savedPlaylists, vm.onlyDownloaded, query) {
                     val saved = savedPlaylists.mapTo(HashSet()) { it.id }
@@ -490,13 +553,13 @@ fun BrowseScreen(vm: AppViewModel) {
     }
 }
 
-/** One artist: photo, name, and their albums with the newest first. */
+/** One artist: photo, name, and their albums. */
 @Composable
 fun ArtistScreen(vm: AppViewModel, screen: Screen.Artist) {
     val local by vm.local.collectAsState()
     val downloadedIds = remember(local) { local.mapTo(HashSet()) { it.albumId } }
-    val shown = remember(vm.albums, local, vm.onlyDownloaded, screen) {
-        sortAlbums(baseAlbums(vm.albums, local, vm.onlyDownloaded).filter { it.artist == screen.name }, SortBy.Year)
+    val shown = remember(vm.albums, local, vm.onlyDownloaded, screen, vm.sort) {
+        sortAlbums(baseAlbums(vm.albums, local, vm.onlyDownloaded).filter { it.artist == screen.name }, vm.sort)
     }
     Column(Modifier.fillMaxSize()) {
         TopBar(vm, "Artist") { GridToggle(vm) }
@@ -515,7 +578,10 @@ fun ArtistScreen(vm: AppViewModel, screen: Screen.Artist) {
                 )
             }
         }
-        DownloadedOnlyCheckbox(vm, Modifier.padding(horizontal = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            DownloadedOnlyCheckbox(vm, Modifier.weight(1f))
+            SortMenu(vm)
+        }
         HorizontalDivider()
         AlbumCollection(vm, shown, downloadedIds, letters = false, empty = "No albums to show.")
     }
@@ -583,7 +649,7 @@ fun TracksScreen(vm: AppViewModel, screen: Screen.Tracks) {
             OutlinedButton(onClick = { vm.download(screen, missing) }, enabled = missing.isNotEmpty()) {
                 Text(if (missing.isEmpty() && ids.isNotEmpty()) "Downloaded" else "Download ($qualityLabel)")
             }
-            if (onPhone.isNotEmpty()) TextButton(onClick = { vm.removeDownloads(onPhone) }) { Text("Remove") }
+            if (onPhone.isNotEmpty()) TextButton(onClick = { vm.removeDownloads(onPhone) }) { Text("Remove download") }
         }
         if (playlist != null) {
             val sync = saved?.sync == true

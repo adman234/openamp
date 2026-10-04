@@ -38,6 +38,9 @@ sealed interface Screen {
     data object Browse : Screen
     data object Downloads : Screen
 
+    /** Every album of one home screen row, reached with "See all". */
+    data class Section(val mode: BrowseMode) : Screen
+
     /** One artist's photo and albums. */
     data class Artist(val name: String, val thumb: String?) : Screen
 
@@ -46,7 +49,8 @@ sealed interface Screen {
 }
 
 enum class BrowseMode(val label: String) {
-    Home("Home"), Albums("Albums"), Artists("Artists"), Playlists("Playlists")
+    Home("Home"), Albums("Albums"), Artists("Artists"), Playlists("Playlists"),
+    RecentlyPlayed("Recently played"), MostPlayed("Most played"), Downloads("Downloads"), RecentlyAdded("Recently added"),
 }
 
 enum class SortBy(val label: String) {
@@ -113,6 +117,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var grid by mutableStateOf(prefs.grid)
         private set
+    var reportPlays by mutableStateOf(prefs.reportPlays)
+        private set
+    var menuModes by mutableStateOf(prefs.menuModes)
+        private set
+
+    /** The browse menu's entries. Home is always there. */
+    val visibleModes: List<BrowseMode>
+        get() = BrowseMode.entries.filter { it == BrowseMode.Home || it.name in menuModes }
 
     val configured: Boolean
         get() = signedIn && validUrl(plexUrl) && validUrl(fileUrl) && folderUri.isNotBlank()
@@ -363,6 +375,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun updateAllowMobile(v: Boolean) { allowMobile = v; prefs.allowMobile = v; if (v) app.downloader.kick() }
     fun updateTheme(v: String) { theme = v; prefs.theme = v }
     fun updateGrid(v: Boolean) { grid = v; prefs.grid = v }
+    fun updateReportPlays(v: Boolean) { reportPlays = v; prefs.reportPlays = v }
+
+    fun setMenuMode(item: BrowseMode, on: Boolean) {
+        if (item == BrowseMode.Home) return
+        menuModes = if (on) menuModes + item.name else menuModes - item.name
+        prefs.menuModes = menuModes
+        if (!on && mode == item) mode = BrowseMode.Home
+    }
 
     fun updateLeveling(v: Boolean) {
         leveling = v

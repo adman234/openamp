@@ -210,6 +210,36 @@ fun SetupScreen(vm: AppViewModel) {
                 }
             }
 
+            Row(
+                Modifier.fillMaxWidth().clickable { vm.updateReportPlays(!vm.reportPlays) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = vm.reportPlays, onCheckedChange = vm::updateReportPlays)
+                Column {
+                    Text("Report plays to Plex")
+                    Text(
+                        "Counts a track as played on your Plex server when it finishes.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            Text("Browse menu", style = MaterialTheme.typography.titleMedium)
+            Text("Choose what the menu at the top of the main screen offers.", style = MaterialTheme.typography.bodySmall)
+            Column {
+                BrowseMode.entries.forEach { item ->
+                    val fixed = item == BrowseMode.Home
+                    val on = fixed || item.name in vm.menuModes
+                    Row(
+                        Modifier.fillMaxWidth().clickable(enabled = !fixed) { vm.setMenuMode(item, !on) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = on, onCheckedChange = { vm.setMenuMode(item, it) }, enabled = !fixed)
+                        Text(if (fixed) "Home (always shown)" else item.label)
+                    }
+                }
+            }
+
             Text("Appearance", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("system" to "Follow the phone", "light" to "Light", "dark" to "Dark").forEach { (value, label) ->

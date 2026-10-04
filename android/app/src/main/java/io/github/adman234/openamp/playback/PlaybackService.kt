@@ -231,6 +231,7 @@ class PlaybackService : MediaLibraryService() {
     private val scrobbleFile by lazy { File(filesDir, "scrobbles.json") }
 
     private fun scrobble(trackId: String) {
+        if (!app.prefs.reportPlays) return
         synchronized(scrobbleFile) {
             runCatching { writeJson(scrobbleFile, readJson<List<String>>(scrobbleFile, emptyList()) + trackId) }
         }

@@ -4,6 +4,7 @@ package io.github.adman234.openamp.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -15,14 +16,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -62,15 +61,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.max
 import androidx.compose.ui.zIndex
 import androidx.media3.common.Player
-import coil.compose.AsyncImage
 import io.github.adman234.openamp.R
 import kotlinx.coroutines.launch
 
@@ -84,14 +82,20 @@ private fun clock(ms: Long): String {
 
 /**
  * The player. Collapsed it is a bar along the bottom. Tap it or drag it up
- * for the full screen player, drag down to collapse it again.
+ * to open it over the lower third of the screen, drag down to collapse it again.
  */
 @Composable
-fun BoxScope.PlayerSheet(vm: AppViewModel, fullHeight: Dp, miniHeight: Dp) {
+fun BoxScope.PlayerSheet(vm: AppViewModel, screenHeight: Dp, miniHeight: Dp) {
     val scope = rememberCoroutineScope()
     val expand = remember { Animatable(0f) }
-    val travel = with(LocalDensity.current) { (fullHeight - miniHeight).toPx() }.coerceAtLeast(1f)
     var showQueue by rememberSaveable { mutableStateOf(false) }
+    // Open, the player covers about a third of the screen. The queue gets more room for its rows.
+    val navBar = miniHeight - MiniHeight
+    val openHeight by animateDpAsState(
+        if (showQueue) screenHeight * 0.7f else max(screenHeight * 0.36f, 300.dp + navBar),
+        label = "player height",
+    )
+    val travel = with(LocalDensity.current) { (openHeight - miniHeight).toPx() }.coerceAtLeast(1f)
 
     BackHandler(enabled = expand.value > 0.5f) {
         if (showQueue) showQueue = false else scope.launch { expand.animateTo(0f) }
@@ -105,7 +109,7 @@ fun BoxScope.PlayerSheet(vm: AppViewModel, fullHeight: Dp, miniHeight: Dp) {
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .height(miniHeight + (fullHeight - miniHeight) * expand.value)
+            .height(miniHeight + (openHeight - miniHeight) * expand.value)
             .draggable(
                 state = drag,
                 orientation = Orientation.Vertical,
@@ -113,6 +117,7 @@ fun BoxScope.PlayerSheet(vm: AppViewModel, fullHeight: Dp, miniHeight: Dp) {
                     // A flick decides by direction, a slow drag by where it was let go.
                     val open = velocity < -600f || (velocity < 600f && expand.value > 0.5f)
                     expand.animateTo(if (open) 1f else 0f)
+                    if (!open) showQueue = false
                 },
             ),
     ) {
@@ -127,7 +132,12 @@ fun BoxScope.PlayerSheet(vm: AppViewModel, fullHeight: Dp, miniHeight: Dp) {
                 Modifier.alpha((expand.value - 0.5f) * 2f),
                 showQueue = showQueue,
                 onToggleQueue = { showQueue = !showQueue },
-                onCollapse = { scope.launch { expand.animateTo(0f) } },
+                onCollapse = {
+                    scope.launch {
+                        expand.animateTo(0f)
+                        showQueue = false
+                    }
+                },
             )
         }
     }
@@ -196,7 +206,7 @@ private fun Controls(vm: AppViewModel) {
         IconButton(onClick = vm::previous, modifier = Modifier.size(56.dp)) {
             Icon(painterResource(R.drawable.ic_skip_previous), contentDescription = "Previous", modifier = Modifier.size(36.dp))
         }
-        FilledIconButton(onClick = vm::togglePlay, modifier = Modifier.size(72.dp)) {
+        FilledIconButton(onClick = vm::togglePlay, modifier = Modifier.size(60.dp)) {
             Icon(
                 painterResource(if (vm.isPlaying) R.drawable.ic_pause else R.drawable.ic_play),
                 contentDescription = if (vm.isPlaying) "Pause" else "Play",
@@ -230,15 +240,14 @@ private fun FullPlayer(
     onCollapse: () -> Unit,
 ) {
     val surface = MaterialTheme.colorScheme.surface
-    // The top of the screen takes on the album artwork's main colour.
+    // The top of the player takes on the album artwork's main colour.
     val tint = vm.artColor?.let { Color(it).copy(alpha = 0.55f).compositeOver(surface) } ?: surface
     Column(
         modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(tint, surface)))
-            .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 16.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onCollapse) {
@@ -250,35 +259,32 @@ private fun FullPlayer(
                         .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 )
             }
-            IconButton(onClick = onToggleQueue) {
-                Icon(
-                    painterResource(R.drawable.ic_queue_music),
-                    contentDescription = if (showQueue) "Hide the queue" else "Show the queue",
-                    tint = if (showQueue) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                )
+            TextButton(onClick = onToggleQueue) {
+                Icon(painterResource(R.drawable.ic_queue_music), contentDescription = null, modifier = Modifier.size(20.dp))
+                Text(if (showQueue) "Hide queue" else "Queue", Modifier.padding(start = 6.dp))
             }
         }
         if (showQueue) {
             QueueView(vm, Modifier.weight(1f))
             return@Column
         }
-        Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-            AsyncImage(
-                model = nowArt(vm),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-            )
+        Row(
+            Modifier.weight(1f).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Art(nowArt(vm), 88.dp, RoundedCornerShape(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(vm.nowTitle, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOf(vm.nowArtist, vm.nowAlbum).filter { it.isNotBlank() }.joinToString(" · "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
-        Text(vm.nowTitle, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(
-            listOf(vm.nowArtist, vm.nowAlbum).filter { it.isNotBlank() }.joinToString(" · "),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
 
         var scrub by remember { mutableStateOf<Float?>(null) }
         val duration = vm.durationMs
@@ -290,14 +296,14 @@ private fun FullPlayer(
                 scrub = null
             },
             enabled = duration > 0,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier.fillMaxWidth().height(36.dp),
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             val shown = scrub?.let { (it * duration).toLong() } ?: vm.positionMs
             Text(clock(shown), style = MaterialTheme.typography.labelSmall)
             Text("-" + clock(duration - shown), style = MaterialTheme.typography.labelSmall)
         }
-        Box(Modifier.padding(top = 8.dp, bottom = 24.dp)) { Controls(vm) }
+        Box(Modifier.padding(top = 2.dp, bottom = 10.dp)) { Controls(vm) }
     }
 }
 

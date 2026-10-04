@@ -63,6 +63,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("leveling", false)
         set(v) = sp.edit().putBoolean("leveling", v).apply()
 
+    /** Tell Plex when a track has been played. Off unless the user turns it on. */
+    var reportPlays: Boolean
+        get() = sp.getBoolean("reportPlays", false)
+        set(v) = sp.edit().putBoolean("reportPlays", v).apply()
+
+    /** Which views besides Home appear in the browse menu, by name. */
+    var menuModes: Set<String>
+        get() = sp.getStringSet("menuModes", null)?.toSet() ?: setOf("Albums", "Artists", "Playlists")
+        set(v) = sp.edit().putStringSet("menuModes", v).apply()
+
     var grid: Boolean
         get() = sp.getBoolean("grid", false)
         set(v) = sp.edit().putBoolean("grid", v).apply()
