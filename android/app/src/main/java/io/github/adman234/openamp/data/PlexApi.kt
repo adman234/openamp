@@ -28,18 +28,27 @@ data class Resource(
 @Serializable
 data class Section(val key: String, val type: String = "", val title: String = "")
 
-/** One row of Plex metadata. Albums and tracks share the shape. */
+@Serializable
+data class Tag(val tag: String = "")
+
+/** One row of Plex metadata. Albums, tracks and playlists share the shape. */
 @Serializable
 data class Item(
     val ratingKey: String,
     val title: String = "",
+    val parentRatingKey: String? = null,
     val parentTitle: String = "",
     val grandparentTitle: String = "",
     val originalTitle: String? = null,
     val thumb: String? = null,
     val parentThumb: String? = null,
+    val composite: String? = null,
     val index: Int? = null,
     val parentIndex: Int? = null,
+    val year: Int? = null,
+    val addedAt: Long? = null,
+    val leafCount: Int? = null,
+    @SerialName("Genre") val genres: List<Tag> = emptyList(),
 )
 
 @Serializable
@@ -52,7 +61,17 @@ private data class Container(
 )
 
 /** An album as the app shows it, whether it came from Plex or from the download records. */
-data class AlbumRef(val id: String, val title: String, val artist: String, val thumb: String?)
+data class AlbumRef(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val thumb: String?,
+    val year: Int? = null,
+    val addedAt: Long = 0,
+    val genres: List<String> = emptyList(),
+)
+
+data class PlaylistRef(val id: String, val title: String, val thumb: String?, val count: Int)
 
 class PlexApi(private val prefs: Prefs, private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
@@ -96,15 +115,30 @@ class PlexApi(private val prefs: Prefs, private val http: OkHttpClient) {
         server("/library/sections").sections.filter { it.type == "artist" }.flatMap { section ->
             // type=9 is album.
             server("/library/sections/${section.key}/all?type=9").items
-        }.map { AlbumRef(it.ratingKey, it.title, it.parentTitle, it.thumb) }
+        }.map { album ->
+            AlbumRef(
+                id = album.ratingKey,
+                title = album.title,
+                artist = album.parentTitle,
+                thumb = album.thumb,
+                year = album.year,
+                addedAt = album.addedAt ?: 0,
+                genres = album.genres.map { it.tag }.filter { it.isNotBlank() },
+            )
+        }
 
     suspend fun tracks(albumId: String): List<Item> = server("/library/metadata/$albumId/children").items
 
-    /** A small square copy of the artwork. The token is added as a header by the image loader. */
-    fun artUrl(thumb: String?): String? {
+    suspend fun playlists(): List<PlaylistRef> = server("/playlists?playlistType=audio").items
+        .map { PlaylistRef(it.ratingKey, it.title, it.composite ?: it.thumb, it.leafCount ?: 0) }
+
+    suspend fun playlistTracks(playlistId: String): List<Item> = server("/playlists/$playlistId/items").items
+
+    /** A square copy of the artwork. The token is added as a header by whoever fetches it. */
+    fun artUrl(thumb: String?, size: Int = 320): String? {
         val base = prefs.plexUrl
         if (thumb == null || base.isBlank()) return null
-        return "$base/photo/:/transcode?width=320&height=320&minSize=1&upscale=1&url=${enc(thumb)}"
+        return "$base/photo/:/transcode?width=$size&height=$size&minSize=1&upscale=1&url=${enc(thumb)}"
     }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")

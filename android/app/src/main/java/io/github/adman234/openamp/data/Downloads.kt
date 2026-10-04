@@ -39,23 +39,48 @@ data class LocalTrack(
     val sourceSize: Long,
     val sourceMtime: Long,
     val thumb: String? = null,
+    val year: Int? = null,
+    val genres: List<String> = emptyList(),
 )
 
-/** The app's record of what is on the phone. A JSON file for the spike; a database comes with the full library index. */
-class DownloadStore(private val file: File) {
-    private val json = Json { ignoreUnknownKeys = true }
-    val tracks = MutableStateFlow(load())
+/** A playlist that was downloaded, so it can be shown with no connection. */
+@Serializable
+data class LocalPlaylist(val id: String, val title: String, val trackIds: List<String>)
 
-    private fun load(): List<LocalTrack> =
-        runCatching { json.decodeFromString<List<LocalTrack>>(file.readText()) }.getOrDefault(emptyList())
+/** Album artwork saved on the phone, for the player bar and the notification when offline. */
+fun artFile(context: Context, albumId: String): File = File(context.filesDir, "art/$albumId.jpg")
+
+/** The app's record of what is on the phone. JSON files in the app's private storage. */
+class DownloadStore(dir: File) {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val tracksFile = File(dir, "downloads.json")
+    private val playlistsFile = File(dir, "playlists.json")
+
+    val tracks = MutableStateFlow(
+        runCatching { json.decodeFromString<List<LocalTrack>>(tracksFile.readText()) }.getOrDefault(emptyList())
+    )
+    val playlists = MutableStateFlow(
+        runCatching { json.decodeFromString<List<LocalPlaylist>>(playlistsFile.readText()) }.getOrDefault(emptyList())
+    )
+
+    private fun write(file: File, text: String) {
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(text)
+        if (!tmp.renameTo(file)) throw IOException("Could not save the download records")
+    }
 
     @Synchronized
     fun upsert(track: LocalTrack) {
         val next = tracks.value.filter { it.id != track.id } + track
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(json.encodeToString(next))
-        if (!tmp.renameTo(file)) throw IOException("Could not save the download records")
+        write(tracksFile, json.encodeToString(next))
         tracks.value = next
+    }
+
+    @Synchronized
+    fun savePlaylist(playlist: LocalPlaylist) {
+        val next = playlists.value.filter { it.id != playlist.id } + playlist
+        write(playlistsFile, json.encodeToString(next))
+        playlists.value = next
     }
 }
 
@@ -71,6 +96,7 @@ data class DownloadStatus(
 class Downloader(
     private val context: Context,
     private val prefs: Prefs,
+    private val plex: PlexApi,
     private val http: OkHttpClient,
     private val store: DownloadStore,
     private val scope: CoroutineScope,
@@ -78,24 +104,31 @@ class Downloader(
     val status = MutableStateFlow<DownloadStatus?>(null)
     private val queue = Mutex()
 
-    fun enqueue(album: AlbumRef, tracks: List<Item>, quality: String) {
-        scope.launch(Dispatchers.IO) { queue.withLock { run(album, tracks, quality) } }
+    /** Each track comes with the album it belongs to, which decides its folder and artwork. */
+    fun enqueue(label: String, tracks: List<Pair<AlbumRef, Item>>, quality: String) {
+        scope.launch(Dispatchers.IO) { queue.withLock { run(label, tracks, quality) } }
     }
 
-    private suspend fun run(album: AlbumRef, tracks: List<Item>, quality: String) {
+    /** Saves the album artwork if it is not on the phone yet. Failure is not an error. */
+    fun fetchArt(album: AlbumRef) {
+        scope.launch(Dispatchers.IO) { ensureArt(album) }
+    }
+
+    private suspend fun run(label: String, tracks: List<Pair<AlbumRef, Item>>, quality: String) {
         var done = 0
         var failed = 0
         var lastError: String? = null
-        for (track in tracks) {
-            status.value = DownloadStatus(album.title, done, tracks.size, failed)
+        for ((album, track) in tracks) {
+            status.value = DownloadStatus(label, done, tracks.size, failed)
             while (!networkAllowed()) {
                 status.value = DownloadStatus(
-                    album.title, done, tracks.size, failed,
+                    label, done, tracks.size, failed,
                     "Waiting for Wi-Fi. Mobile data downloads are turned off.",
                 )
                 delay(5_000)
             }
             try {
+                ensureArt(album)
                 store.upsert(fetch(album, track, quality))
                 done++
             } catch (e: CancellationException) {
@@ -105,7 +138,7 @@ class Downloader(
                 lastError = e.message ?: e.javaClass.simpleName
             }
         }
-        status.value = DownloadStatus(album.title, done, tracks.size, failed, lastError, active = false)
+        status.value = DownloadStatus(label, done, tracks.size, failed, lastError, active = false)
     }
 
     private fun networkAllowed(): Boolean {
@@ -113,6 +146,23 @@ class Downloader(
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+
+    private fun ensureArt(album: AlbumRef) {
+        val file = artFile(context, album.id)
+        if (file.exists()) return
+        val url = plex.artUrl(album.thumb, 600) ?: return
+        val token = prefs.token ?: return
+        runCatching {
+            http.newCall(Request.Builder().url(url).header("X-Plex-Token", token).build()).execute().use { resp ->
+                val body = resp.body
+                if (!resp.isSuccessful || body == null) return
+                file.parentFile?.mkdirs()
+                val tmp = File(file.path + ".tmp")
+                tmp.outputStream().use { body.byteStream().copyTo(it) }
+                tmp.renameTo(file)
+            }
+        }
     }
 
     private fun fetch(album: AlbumRef, track: Item, quality: String): LocalTrack {
@@ -160,6 +210,8 @@ class Downloader(
                 sourceSize = resp.header("X-OpenAmp-Source-Size")?.toLongOrNull() ?: 0,
                 sourceMtime = resp.header("X-OpenAmp-Source-Mtime")?.toLongOrNull() ?: 0,
                 thumb = album.thumb,
+                year = album.year,
+                genres = album.genres,
             )
         }
     }

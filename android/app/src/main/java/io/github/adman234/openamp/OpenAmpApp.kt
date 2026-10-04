@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 class OpenAmpApp : Application(), ImageLoaderFactory {
@@ -38,8 +37,8 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             .readTimeout(180, TimeUnit.SECONDS)
             .build()
         plex = PlexApi(prefs, http)
-        store = DownloadStore(File(filesDir, "downloads.json"))
-        downloader = Downloader(this, prefs, http, store, scope)
+        store = DownloadStore(filesDir)
+        downloader = Downloader(this, prefs, plex, http, store, scope)
     }
 
     // Artwork comes from Plex, which wants the token. It goes in a header and

@@ -18,16 +18,45 @@ import com.google.common.util.concurrent.ListenableFuture
 import io.github.adman234.openamp.OpenAmpApp
 import io.github.adman234.openamp.data.AlbumRef
 import io.github.adman234.openamp.data.Item
+import io.github.adman234.openamp.data.LocalPlaylist
 import io.github.adman234.openamp.data.LocalTrack
+import io.github.adman234.openamp.data.PlaylistRef
 import io.github.adman234.openamp.data.Resource
+import io.github.adman234.openamp.data.artFile
 import io.github.adman234.openamp.playback.PlaybackService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 sealed interface Screen {
     data object Setup : Screen
-    data object Albums : Screen
-    data class Album(val album: AlbumRef) : Screen
+    data object Browse : Screen
+
+    /** The albums of one artist or one genre. */
+    data class AlbumList(val title: String, val artist: String? = null, val genre: String? = null) : Screen
+
+    /** The tracks of one album or one playlist. */
+    data class Tracks(val album: AlbumRef? = null, val playlist: PlaylistRef? = null) : Screen
+}
+
+enum class BrowseMode(val label: String) {
+    Albums("Albums"), Artists("Artists"), Playlists("Playlists"), Genres("Genres")
+}
+
+enum class SortBy(val label: String) {
+    Title("Title"), Artist("Artist"), Recent("Recently added"), Year("Year")
+}
+
+/** Adds https:// when the scheme is missing. An address that is only a scheme counts as empty. */
+fun normalizeUrl(input: String): String {
+    val text = input.trim()
+    if (text.isEmpty() || text.equals("https://", true) || text.equals("http://", true)) return ""
+    return (if ("://" in text) text else "https://$text").trimEnd('/')
+}
+
+fun validUrl(input: String): Boolean {
+    val url = normalizeUrl(input)
+    return url.startsWith("https://", ignoreCase = true) && url.toHttpUrlOrNull() != null
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -36,6 +65,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val plex = app.plex
 
     val local = app.store.tracks
+    val localPlaylists = app.store.playlists
     val download = app.downloader.status
 
     var signedIn by mutableStateOf(prefs.token != null)
@@ -58,11 +88,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     val configured: Boolean
-        get() = signedIn && plexUrl.isNotBlank() && fileUrl.isNotBlank() && folderUri.isNotBlank()
+        get() = signedIn && validUrl(plexUrl) && validUrl(fileUrl) && folderUri.isNotBlank()
 
-    var screen by mutableStateOf<Screen>(if (configured) Screen.Albums else Screen.Setup)
+    private var stack by mutableStateOf<List<Screen>>(listOf(if (configured) Screen.Browse else Screen.Setup))
+    val screen: Screen get() = stack.last()
+    val canGoBack: Boolean get() = stack.size > 1
+
+    var mode by mutableStateOf(BrowseMode.Albums)
+    var sort by mutableStateOf(SortBy.Title)
+    var query by mutableStateOf("")
+    var onlyDownloaded by mutableStateOf(false)
 
     var albums by mutableStateOf<List<AlbumRef>>(emptyList())
+        private set
+    var playlists by mutableStateOf<List<PlaylistRef>>(emptyList())
         private set
     var tracks by mutableStateOf<List<Item>>(emptyList())
         private set
@@ -71,9 +110,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var error by mutableStateOf<String?>(null)
         private set
 
-    var nowPlaying by mutableStateOf<String?>(null)
+    var nowId by mutableStateOf<String?>(null)
+        private set
+    var nowTitle by mutableStateOf("")
+        private set
+    var nowArtist by mutableStateOf("")
         private set
     var isPlaying by mutableStateOf(false)
+        private set
+    var shuffle by mutableStateOf(false)
+        private set
+    var repeatMode by mutableStateOf(Player.REPEAT_MODE_OFF)
         private set
 
     private var accountToken: String? = null
@@ -94,14 +141,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun readPlayer(player: Player) {
+        val item = player.currentMediaItem
+        nowId = item?.mediaId
+        nowTitle = item?.mediaMetadata?.title?.toString().orEmpty()
+        nowArtist = item?.mediaMetadata?.artist?.toString().orEmpty()
         isPlaying = player.isPlaying
-        nowPlaying = player.currentMediaItem?.let { item ->
-            listOfNotNull(item.mediaMetadata.title, item.mediaMetadata.artist).joinToString(" · ")
-        }
+        shuffle = player.shuffleModeEnabled
+        repeatMode = player.repeatMode
     }
 
     override fun onCleared() {
         MediaController.releaseFuture(controllerFuture)
+    }
+
+    // Navigation
+
+    fun open(next: Screen) {
+        stack = stack + next
+    }
+
+    fun back() {
+        if (stack.size > 1) stack = stack.dropLast(1)
+    }
+
+    fun finishSetup() {
+        settleUrls()
+        if (configured) stack = listOf(Screen.Browse)
     }
 
     // Sign-in and settings
@@ -157,25 +222,47 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         signedIn = false
         servers = emptyList()
         albums = emptyList()
+        playlists = emptyList()
+        stack = listOf(Screen.Setup)
     }
 
-    fun updatePlexUrl(v: String) { plexUrl = v; prefs.plexUrl = v }
-    fun updateFileUrl(v: String) { fileUrl = v; prefs.fileServiceUrl = v }
+    // The text fields hold what was typed. Only a valid https address is saved.
+    fun updatePlexUrl(v: String) {
+        plexUrl = v
+        prefs.plexUrl = if (validUrl(v)) normalizeUrl(v) else ""
+    }
+
+    fun updateFileUrl(v: String) {
+        fileUrl = v
+        prefs.fileServiceUrl = if (validUrl(v)) normalizeUrl(v) else ""
+    }
+
+    /** Tidies both address fields once typing is over. */
+    fun settleUrls() {
+        plexUrl = normalizeUrl(plexUrl)
+        fileUrl = normalizeUrl(fileUrl)
+    }
+
     fun updateFolder(uri: Uri) { folderUri = uri.toString(); prefs.folderUri = folderUri }
     fun updateQuality(v: String) { quality = v; prefs.quality = v }
     fun updateAllowMobile(v: Boolean) { allowMobile = v; prefs.allowMobile = v }
 
     // Library
 
-    fun artUrl(thumb: String?): String? = plex.artUrl(thumb)
+    /** Artwork saved on the phone when there is some, otherwise the copy on Plex. */
+    fun art(albumId: String?, thumb: String?): Any? {
+        if (albumId != null) artFile(app, albumId).takeIf { it.exists() }?.let { return it }
+        return plex.artUrl(thumb)
+    }
 
-    fun loadAlbums() {
+    fun loadLibrary() {
         if (loading) return
         loading = true
         error = null
         viewModelScope.launch {
             try {
-                albums = plex.albums().sortedBy { it.title.lowercase() }
+                albums = plex.albums()
+                playlists = runCatching { plex.playlists() }.getOrDefault(emptyList())
             } catch (e: Exception) {
                 error = "Could not reach Plex, showing downloads only. ${e.message}"
             } finally {
@@ -185,26 +272,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openAlbum(album: AlbumRef) {
+        val target = Screen.Tracks(album = album)
         tracks = emptyList()
-        screen = Screen.Album(album)
+        open(target)
+        if (local.value.any { it.albumId == album.id }) app.downloader.fetchArt(album)
         viewModelScope.launch {
-            try {
-                val loaded = plex.tracks(album.id)
-                if ((screen as? Screen.Album)?.album?.id == album.id) tracks = loaded
-            } catch (e: Exception) {
-                // Offline: the screen falls back to the downloaded tracks.
-            }
+            // Offline this fails, and the screen falls back to the downloaded tracks.
+            val loaded = runCatching { plex.tracks(album.id) }.getOrNull() ?: return@launch
+            if (screen == target) tracks = loaded
         }
     }
 
-    fun download(album: AlbumRef, items: List<Item>) {
-        if (items.isNotEmpty()) app.downloader.enqueue(album, items, quality)
+    fun openPlaylist(playlist: PlaylistRef) {
+        val target = Screen.Tracks(playlist = playlist)
+        tracks = emptyList()
+        open(target)
+        viewModelScope.launch {
+            val loaded = runCatching { plex.playlistTracks(playlist.id) }.getOrNull() ?: return@launch
+            if (screen == target) tracks = loaded
+            // Keep a downloaded playlist's saved track list in step with the server.
+            if (localPlaylists.value.any { it.id == playlist.id }) savePlaylist(playlist, loaded)
+        }
+    }
+
+    private fun savePlaylist(playlist: PlaylistRef, items: List<Item>) {
+        runCatching { app.store.savePlaylist(LocalPlaylist(playlist.id, playlist.title, items.map { it.ratingKey })) }
+    }
+
+    private fun albumOf(item: Item): AlbumRef =
+        albums.firstOrNull { it.id == item.parentRatingKey }
+            ?: AlbumRef(
+                id = item.parentRatingKey ?: "unknown",
+                title = item.parentTitle.ifBlank { "Unknown album" },
+                artist = item.grandparentTitle,
+                thumb = item.parentThumb ?: item.thumb,
+            )
+
+    /** Downloads tracks from the open album or playlist. */
+    fun download(source: Screen.Tracks, items: List<Item>) {
+        if (items.isEmpty()) return
+        source.playlist?.let { savePlaylist(it, tracks) }
+        val label = source.album?.title ?: source.playlist?.title ?: "tracks"
+        app.downloader.enqueue(label, items.map { (source.album ?: albumOf(it)) to it }, quality)
     }
 
     // Playback
 
     fun play(queue: List<LocalTrack>, startIndex: Int) {
         val c = controller ?: return
+        if (queue.isEmpty()) return
         c.setMediaItems(queue.map(::mediaItem), startIndex, 0L)
         c.prepare()
         c.play()
@@ -215,11 +331,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun next() {
-        controller?.seekToNextMediaItem()
+        controller?.seekToNext()
+    }
+
+    /** Restarts the track, or goes to the one before when already near its start. */
+    fun previous() {
+        controller?.seekToPrevious()
+    }
+
+    fun toggleShuffle() {
+        controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+    }
+
+    /** Off, then repeat the whole queue, then repeat one track. */
+    fun cycleRepeat() {
+        controller?.let {
+            it.repeatMode = when (it.repeatMode) {
+                Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                else -> Player.REPEAT_MODE_OFF
+            }
+        }
     }
 
     private fun mediaItem(t: LocalTrack): MediaItem {
         val uri = Uri.parse(t.uri)
+        // The session loads this for the notification and lock screen. A file on
+        // the phone works with no connection.
+        val art = artFile(app, t.albumId).takeIf { it.exists() }?.let(Uri::fromFile)
         return MediaItem.Builder()
             .setMediaId(t.id)
             .setUri(uri)
@@ -230,6 +369,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     .setArtist(t.artist)
                     .setAlbumTitle(t.album)
                     .setAlbumArtist(t.albumArtist)
+                    .setArtworkUri(art)
                     .build()
             )
             .build()
