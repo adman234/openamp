@@ -1,0 +1,19 @@
+services:
+  openamp-files:
+    image: ghcr.io/adman234/openamp-files:dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Address the container uses to reach Plex. A LAN address is fine here.
+      PLEX_URL: http://192.168.1.10:32400
+      # Folder as Plex sees it = folder as this container sees it.
+      PATH_MAP: /data/music=/music
+      CACHE_MAX_MB: "10240"
+      # Optional. Defaults are 192, 128 and 96.
+      # OPUS_HIGH_KBPS: "192"
+      # OPUS_MEDIUM_KBPS: "128"
+      # OPUS_LOW_KBPS: "96"
+    volumes:
+      - /mnt/user/media/music:/music:ro
+      - /mnt/user/appdata/openamp-files/cache:/cache
