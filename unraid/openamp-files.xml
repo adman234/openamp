@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>openamp-files</Name>
+  <Repository>ghcr.io/adman234/openamp-files:dev</Repository>
+  <Registry>https://github.com/adman234/openamp/pkgs/container/openamp-files</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/adman234/openamp/issues</Support>
+  <Project>https://github.com/adman234/openamp</Project>
+  <Overview>File service for the OpenAmp Android app. Serves audio from the music share by Plex track id, and makes Opus copies with ffmpeg for the High, Medium and Low download settings. Every request is checked against Plex with the caller's Plex token.</Overview>
+  <Category>MediaServer:Music</Category>
+  <WebUI/>
+  <TemplateURL>https://raw.githubusercontent.com/adman234/openamp/main/unraid/openamp-files.xml</TemplateURL>
+  <Icon/>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>A Plex Media Server with a music library.</Requires>
+  <Config Name="Port" Target="8080" Default="8080" Mode="tcp" Description="Port the file service listens on. Point your reverse proxy at this." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Music share" Target="/music" Default="/mnt/user/media/music" Mode="ro" Description="Your music folder on Unraid. Mounted read-only." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media/music</Config>
+  <Config Name="Cache" Target="/cache" Default="/mnt/user/appdata/openamp-files/cache" Mode="rw" Description="Where the Opus copies are kept." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/openamp-files/cache</Config>
+  <Config Name="Plex address" Target="PLEX_URL" Default="http://192.168.1.10:32400" Mode="" Description="Address this container uses to reach Plex. A LAN address is fine." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.1.10:32400</Config>
+  <Config Name="Path mapping" Target="PATH_MAP" Default="/data/music=/music" Mode="" Description="The music folder as Plex sees it, then =, then the folder as this container sees it. Find the Plex side in Plex under Manage Library, Edit, Add folders. Several pairs are separated by commas." Type="Variable" Display="always" Required="true" Mask="false">/data/music=/music</Config>
+  <Config Name="Cache size cap (MB)" Target="CACHE_MAX_MB" Default="10240" Mode="" Description="The least recently used Opus copies are removed once the cache passes this size." Type="Variable" Display="always" Required="false" Mask="false">10240</Config>
+  <Config Name="High bitrate (kbps)" Target="OPUS_HIGH_KBPS" Default="192" Mode="" Description="Opus bitrate for the High setting." Type="Variable" Display="advanced" Required="false" Mask="false">192</Config>
+  <Config Name="Medium bitrate (kbps)" Target="OPUS_MEDIUM_KBPS" Default="128" Mode="" Description="Opus bitrate for the Medium setting." Type="Variable" Display="advanced" Required="false" Mask="false">128</Config>
+  <Config Name="Low bitrate (kbps)" Target="OPUS_LOW_KBPS" Default="96" Mode="" Description="Opus bitrate for the Low setting." Type="Variable" Display="advanced" Required="false" Mask="false">96</Config>
+</Container>
