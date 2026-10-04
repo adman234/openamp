@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="OpenAmp icon" width="96">
+
 # OpenAmp
 
 An Android app that downloads music for offline listening. Plex supplies the library, artwork and track names. A small Go file service on the home server supplies the audio files straight from the music share.
