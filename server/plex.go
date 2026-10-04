@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,6 +25,21 @@ type track struct {
 	Container string
 	Codec     string
 	Bitrate   int // kbps
+	// Loudness correction in dB from Plex's own analysis. Nil when Plex has
+	// not analysed the track.
+	Gain      *float64
+	AlbumGain *float64
+}
+
+// looseFloat reads a number that Plex may send bare or as a string.
+type looseFloat struct{ v *float64 }
+
+func (l *looseFloat) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		l.v = &f
+	}
+	return nil
 }
 
 type plexMetadata struct {
@@ -34,7 +51,12 @@ type plexMetadata struct {
 				AudioCodec string `json:"audioCodec"`
 				Container  string `json:"container"`
 				Part       []struct {
-					File string `json:"file"`
+					File   string `json:"file"`
+					Stream []struct {
+						StreamType int        `json:"streamType"`
+						Gain       looseFloat `json:"gain"`
+						AlbumGain  looseFloat `json:"albumGain"`
+					} `json:"Stream"`
 				} `json:"Part"`
 			} `json:"Media"`
 		} `json:"Metadata"`
@@ -115,6 +137,12 @@ func (p *plexClient) lookup(ctx context.Context, token, id string) (*track, erro
 	for _, m := range items[0].Media {
 		if len(m.Part) > 0 && m.Part[0].File != "" {
 			t = &track{File: m.Part[0].File, Container: m.Container, Codec: m.AudioCodec, Bitrate: m.Bitrate}
+			for _, st := range m.Part[0].Stream {
+				if st.StreamType == 2 { // audio
+					t.Gain, t.AlbumGain = st.Gain.v, st.AlbumGain.v
+					break
+				}
+			}
 			break
 		}
 	}

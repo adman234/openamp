@@ -163,8 +163,15 @@ fun SetupScreen(vm: AppViewModel) {
                 if (vm.folderUri.isBlank()) "No download folder chosen yet."
                 else "Download folder: ${folderLabel(vm.folderUri)}",
             )
+            vm.folderNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             OutlinedButton(onClick = { pickFolder.launch(null) }) {
                 Text(if (vm.folderUri.isBlank()) "Choose download folder" else "Change download folder")
+            }
+            if (vm.folderUri.isBlank()) {
+                Text(
+                    "After a reinstall, choose the same folder as before and the app finds the music already in it.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             Text("Download quality", style = MaterialTheme.typography.bodyMedium)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -182,6 +189,36 @@ fun SetupScreen(vm: AppViewModel) {
             ) {
                 Checkbox(checked = vm.allowMobile, onCheckedChange = vm::updateAllowMobile)
                 Text("Allow downloads using mobile data")
+            }
+
+            if (vm.configured) {
+                OutlinedButton(onClick = { vm.open(Screen.Downloads) }) { Text("Downloads and storage") }
+            }
+
+            Text("Playback", style = MaterialTheme.typography.titleMedium)
+            Row(
+                Modifier.fillMaxWidth().clickable { vm.updateLeveling(!vm.leveling) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = vm.leveling, onCheckedChange = vm::updateLeveling)
+                Column {
+                    Text("Volume leveling")
+                    Text(
+                        "Evens out loud and quiet tracks, using the loudness Plex measured for each one.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            Text("Appearance", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("system" to "Follow the phone", "light" to "Light", "dark" to "Dark").forEach { (value, label) ->
+                    FilterChip(
+                        selected = vm.theme == value,
+                        onClick = { vm.updateTheme(value) },
+                        label = { Text(label) },
+                    )
+                }
             }
 
             Button(onClick = vm::finishSetup, enabled = vm.configured) { Text("Done") }

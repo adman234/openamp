@@ -76,7 +76,7 @@ func fakePlex(t *testing.T, plexRoot string) *httptest.Server {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		fmt.Fprintf(w, `{"MediaContainer":{"Metadata":[{"type":"track","Media":[{"bitrate":128,"audioCodec":"mp3","container":"mp3","Part":[{"file":%q}]}]}]}}`,
+		fmt.Fprintf(w, `{"MediaContainer":{"Metadata":[{"type":"track","Media":[{"bitrate":128,"audioCodec":"mp3","container":"mp3","Part":[{"file":%q,"Stream":[{"streamType":2,"gain":-7.25,"albumGain":"-6.5"}]}]}]}]}}`,
 			plexRoot+"/Artist/Album/01 Song.mp3")
 	}))
 }
@@ -144,6 +144,9 @@ func TestFile(t *testing.T) {
 	rec := do(s, "/v1/tracks/1/file", "good")
 	if rec.Code != http.StatusOK || rec.Body.String() != string(body) {
 		t.Fatalf("original: got %d %q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-OpenAmp-Gain") != "-7.25" || rec.Header().Get("X-OpenAmp-Album-Gain") != "-6.50" {
+		t.Errorf("gain headers: %v", rec.Header())
 	}
 	if rec.Header().Get("X-OpenAmp-Ext") != "mp3" || rec.Header().Get("X-OpenAmp-Transcoded") != "false" {
 		t.Errorf("original headers: %v", rec.Header())

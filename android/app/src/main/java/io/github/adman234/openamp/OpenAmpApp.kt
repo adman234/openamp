@@ -5,6 +5,8 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import io.github.adman234.openamp.data.DownloadStore
 import io.github.adman234.openamp.data.Downloader
+import io.github.adman234.openamp.data.History
+import io.github.adman234.openamp.data.ResumeStore
 import io.github.adman234.openamp.data.PlexApi
 import io.github.adman234.openamp.data.Prefs
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +29,10 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
         private set
     lateinit var downloader: Downloader
         private set
+    lateinit var history: History
+        private set
+    lateinit var resume: ResumeStore
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -37,7 +43,9 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             .readTimeout(180, TimeUnit.SECONDS)
             .build()
         plex = PlexApi(prefs, http)
-        store = DownloadStore(filesDir)
+        store = DownloadStore(this)
+        history = History(filesDir)
+        resume = ResumeStore(filesDir)
         downloader = Downloader(this, prefs, plex, http, store, scope)
     }
 

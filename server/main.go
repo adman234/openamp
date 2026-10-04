@@ -240,6 +240,12 @@ func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-OpenAmp-Transcoded", strconv.FormatBool(transcoded))
 	h.Set("X-OpenAmp-Source-Size", strconv.FormatInt(st.Size(), 10))
 	h.Set("X-OpenAmp-Source-Mtime", strconv.FormatInt(st.ModTime().Unix(), 10))
+	if t.Gain != nil {
+		h.Set("X-OpenAmp-Gain", strconv.FormatFloat(*t.Gain, 'f', 2, 64))
+	}
+	if t.AlbumGain != nil {
+		h.Set("X-OpenAmp-Album-Gain", strconv.FormatFloat(*t.AlbumGain, 'f', 2, 64))
+	}
 	// ServeContent handles Range and If-Range, which gives resume support.
 	http.ServeContent(w, r, "", modTime, f)
 }
@@ -251,6 +257,8 @@ type infoEntry struct {
 	Container string `json:"container,omitempty"`
 	Codec     string `json:"codec,omitempty"`
 	Bitrate   int    `json:"bitrate,omitempty"`
+	Gain      *float64 `json:"gain,omitempty"`
+	AlbumGain *float64 `json:"albumGain,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -300,6 +308,7 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			default:
 				e.Size, e.Mtime = st.Size(), st.ModTime().Unix()
 				e.Container, e.Codec, e.Bitrate = t.Container, t.Codec, t.Bitrate
+				e.Gain, e.AlbumGain = t.Gain, t.AlbumGain
 			}
 			out[i] = e
 		}()

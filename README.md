@@ -4,7 +4,9 @@
 
 An Android app that downloads music for offline listening. Plex supplies the library, artwork and track names. A small Go file service on the home server supplies the audio files straight from the music share.
 
-Status: phase 0 (spike). The file service is feature complete for version 1. The app signs in to Plex, lists albums, downloads an album to a folder you choose, and plays it with no connection.
+Status: in development. The app browses the Plex library, downloads albums and playlists to a folder you choose, and plays them with no connection. It has a full screen player with a queue, a home screen widget, Android Auto browsing, volume leveling, and it reports plays back to Plex.
+
+Get the app from the [dev release](https://github.com/adman234/openamp/releases/tag/dev). Every build is signed with the same key, so a new one installs over the old one.
 
 ## Layout
 
@@ -57,12 +59,25 @@ Downloads run on Wi-Fi only unless "Also download on mobile data" is ticked.
 
 ## To do
 
-- Full library index with browse and search
-- Download queue with retries
+Next:
+
+- Sync button: check downloads against the files on disk and against changes on the server
 - Plex token refresh
-- Sync button and storage screen
-- Signed release APKs
 - Chromecast
+
+Long term:
+
+- Sleep timer
+- Lyrics
+- Playback speed
+- Equalizer and crossfade
+- A Songs tab
+- Genres
+- Track ratings and favorites, synced to Plex
+- Download everything by an artist
+- Resume playback when headphones reconnect
+- Plex radio and sonic mixes
+- Artwork in Android Auto
 
 ## License
 

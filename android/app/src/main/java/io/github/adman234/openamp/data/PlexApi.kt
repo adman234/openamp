@@ -61,6 +61,7 @@ private data class Container(
 )
 
 /** An album as the app shows it, whether it came from Plex or from the download records. */
+@Serializable
 data class AlbumRef(
     val id: String,
     val title: String,
@@ -72,6 +73,14 @@ data class AlbumRef(
 )
 
 data class PlaylistRef(val id: String, val title: String, val thumb: String?, val count: Int)
+
+data class ArtistRef(val name: String, val thumb: String?)
+
+@Serializable
+data class TrackGain(val id: String, val gain: Float? = null, val albumGain: Float? = null)
+
+@Serializable
+private data class InfoAnswer(val tracks: List<TrackGain> = emptyList())
 
 class PlexApi(private val prefs: Prefs, private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
@@ -126,6 +135,30 @@ class PlexApi(private val prefs: Prefs, private val http: OkHttpClient) {
                 genres = album.genres.map { it.tag }.filter { it.isNotBlank() },
             )
         }
+
+    /** Artists with their photos. type=8 is artist. */
+    suspend fun artists(): List<ArtistRef> =
+        server("/library/sections").sections.filter { it.type == "artist" }.flatMap { section ->
+            server("/library/sections/${section.key}/all?type=8").items
+        }.map { ArtistRef(it.title, it.thumb) }
+
+    /** Tells Plex a track was played, which updates its play count and last played time. */
+    suspend fun scrobble(trackId: String) {
+        val base = prefs.plexUrl
+        if (base.isBlank()) throw IOException("The Plex address is not set")
+        call(request("$base/:/scrobble?key=$trackId&identifier=com.plexapp.plugins.library", prefs.token).build())
+    }
+
+    /** Loudness gain for downloaded tracks, from the file service. */
+    suspend fun gains(ids: List<String>): List<TrackGain> {
+        val base = prefs.fileServiceUrl
+        if (base.isBlank() || ids.isEmpty()) return emptyList()
+        return ids.chunked(200).flatMap { chunk ->
+            json.decodeFromString<InfoAnswer>(
+                call(request("$base/v1/tracks/info?ids=${chunk.joinToString(",")}", prefs.token).build())
+            ).tracks
+        }
+    }
 
     suspend fun tracks(albumId: String): List<Item> = server("/library/metadata/$albumId/children").items
 

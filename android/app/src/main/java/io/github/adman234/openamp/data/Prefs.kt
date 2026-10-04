@@ -1,6 +1,7 @@
 package io.github.adman234.openamp.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -52,9 +53,29 @@ class Prefs(context: Context) {
         get() = sp.getString("quality", "medium")!!
         set(v) = sp.edit().putString("quality", v).apply()
 
+    /** system, light or dark. */
+    var theme: String
+        get() = sp.getString("theme", "system")!!
+        set(v) = sp.edit().putString("theme", v).apply()
+
+    /** Even out loudness between tracks, using the gain Plex worked out. */
+    var leveling: Boolean
+        get() = sp.getBoolean("leveling", false)
+        set(v) = sp.edit().putBoolean("leveling", v).apply()
+
+    var grid: Boolean
+        get() = sp.getBoolean("grid", false)
+        set(v) = sp.edit().putBoolean("grid", v).apply()
+
     var allowMobile: Boolean
         get() = sp.getBoolean("allowMobile", false)
         set(v) = sp.edit().putBoolean("allowMobile", v).apply()
+
+    fun register(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        sp.registerOnSharedPreferenceChangeListener(listener)
+
+    fun unregister(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        sp.unregisterOnSharedPreferenceChangeListener(listener)
 
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }

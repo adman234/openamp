@@ -2,6 +2,9 @@ package io.github.adman234.openamp.ui
 
 import android.app.Application
 import android.content.ComponentName
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -9,43 +12,55 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.adman234.openamp.OpenAmpApp
 import io.github.adman234.openamp.data.AlbumRef
+import io.github.adman234.openamp.data.ArtistRef
 import io.github.adman234.openamp.data.Item
 import io.github.adman234.openamp.data.LocalPlaylist
 import io.github.adman234.openamp.data.LocalTrack
 import io.github.adman234.openamp.data.PlaylistRef
 import io.github.adman234.openamp.data.Resource
 import io.github.adman234.openamp.data.artFile
+import io.github.adman234.openamp.playback.Media
 import io.github.adman234.openamp.playback.PlaybackService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 sealed interface Screen {
     data object Setup : Screen
     data object Browse : Screen
+    data object Downloads : Screen
 
-    /** The albums of one artist or one genre. */
-    data class AlbumList(val title: String, val artist: String? = null, val genre: String? = null) : Screen
+    /** One artist's photo and albums. */
+    data class Artist(val name: String, val thumb: String?) : Screen
 
     /** The tracks of one album or one playlist. */
     data class Tracks(val album: AlbumRef? = null, val playlist: PlaylistRef? = null) : Screen
 }
 
 enum class BrowseMode(val label: String) {
-    Albums("Albums"), Artists("Artists"), Playlists("Playlists"), Genres("Genres")
+    Home("Home"), Albums("Albums"), Artists("Artists"), Playlists("Playlists")
 }
 
 enum class SortBy(val label: String) {
     Title("Title"), Artist("Artist"), Recent("Recently added"), Year("Year")
 }
+
+/** What a long press opened the menu for. */
+sealed interface MenuTarget {
+    data class OfAlbum(val album: AlbumRef) : MenuTarget
+    data class OfTrack(val source: Screen.Tracks, val item: Item?, val local: LocalTrack?) : MenuTarget
+}
+
+/** One row of the play queue. uid stays the same when rows are reordered. */
+data class QueueEntry(val uid: String, val title: String, val artist: String, val albumId: String?)
 
 /** Adds https:// when the scheme is missing. An address that is only a scheme counts as empty. */
 fun normalizeUrl(input: String): String {
@@ -66,7 +81,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val local = app.store.tracks
     val localPlaylists = app.store.playlists
-    val download = app.downloader.status
+    val history = app.history.plays
+    val downloadQueue = app.downloader.queue
+    val downloadProgress = app.downloader.progress
+    val downloadsPaused = app.downloader.paused
+    val downloadNotice = app.downloader.notice
 
     var signedIn by mutableStateOf(prefs.token != null)
         private set
@@ -82,9 +101,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var folderUri by mutableStateOf(prefs.folderUri)
         private set
+    var folderNotice by mutableStateOf<String?>(null)
+        private set
     var quality by mutableStateOf(prefs.quality)
         private set
     var allowMobile by mutableStateOf(prefs.allowMobile)
+        private set
+    var theme by mutableStateOf(prefs.theme)
+        private set
+    var leveling by mutableStateOf(prefs.leveling)
+        private set
+    var grid by mutableStateOf(prefs.grid)
         private set
 
     val configured: Boolean
@@ -94,12 +121,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val screen: Screen get() = stack.last()
     val canGoBack: Boolean get() = stack.size > 1
 
-    var mode by mutableStateOf(BrowseMode.Albums)
+    var mode by mutableStateOf(BrowseMode.Home)
     var sort by mutableStateOf(SortBy.Title)
     var query by mutableStateOf("")
     var onlyDownloaded by mutableStateOf(false)
+    var menu by mutableStateOf<MenuTarget?>(null)
 
     var albums by mutableStateOf<List<AlbumRef>>(emptyList())
+        private set
+    var artists by mutableStateOf<List<ArtistRef>>(emptyList())
         private set
     var playlists by mutableStateOf<List<PlaylistRef>>(emptyList())
         private set
@@ -116,11 +146,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var nowArtist by mutableStateOf("")
         private set
+    var nowAlbum by mutableStateOf("")
+        private set
+    var nowAlbumId by mutableStateOf<String?>(null)
+        private set
     var isPlaying by mutableStateOf(false)
         private set
     var shuffle by mutableStateOf(false)
         private set
     var repeatMode by mutableStateOf(Player.REPEAT_MODE_OFF)
+        private set
+    var queue by mutableStateOf<List<QueueEntry>>(emptyList())
+        private set
+    var queueIndex by mutableStateOf(0)
+        private set
+    var positionMs by mutableStateOf(0L)
+        private set
+    var durationMs by mutableStateOf(0L)
+        private set
+
+    /** The main colour of the playing album's artwork, as ARGB, for the full player's background. */
+    var artColor by mutableStateOf<Int?>(null)
         private set
 
     private var accountToken: String? = null
@@ -133,21 +179,74 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         controllerFuture.addListener({
             controller = runCatching { controllerFuture.get() }.getOrNull()?.also { c ->
                 c.addListener(object : Player.Listener {
-                    override fun onEvents(player: Player, events: Player.Events) = readPlayer(player)
+                    override fun onEvents(player: Player, events: Player.Events) =
+                        readPlayer(player, events.contains(Player.EVENT_TIMELINE_CHANGED))
                 })
-                readPlayer(c)
+                readPlayer(c, true)
             }
         }, ContextCompat.getMainExecutor(app))
+
+        viewModelScope.launch {
+            while (true) {
+                controller?.let {
+                    positionMs = it.currentPosition.coerceAtLeast(0)
+                    durationMs = it.duration.coerceAtLeast(0)
+                }
+                delay(500)
+            }
+        }
+        // A queue left over from last time continues now that the app is open.
+        app.downloader.kick()
     }
 
-    private fun readPlayer(player: Player) {
-        val item = player.currentMediaItem
-        nowId = item?.mediaId
-        nowTitle = item?.mediaMetadata?.title?.toString().orEmpty()
-        nowArtist = item?.mediaMetadata?.artist?.toString().orEmpty()
+    private fun readPlayer(player: Player, timelineChanged: Boolean) {
+        val meta = player.currentMediaItem?.mediaMetadata
+        val albumId = meta?.extras?.getString(Media.ALBUM_ID)
+        nowId = player.currentMediaItem?.mediaId
+        nowTitle = meta?.title?.toString().orEmpty()
+        nowArtist = meta?.artist?.toString().orEmpty()
+        nowAlbum = meta?.albumTitle?.toString().orEmpty()
         isPlaying = player.isPlaying
         shuffle = player.shuffleModeEnabled
         repeatMode = player.repeatMode
+        queueIndex = player.currentMediaItemIndex
+        if (timelineChanged) {
+            val seen = HashMap<String, Int>()
+            queue = (0 until player.mediaItemCount).map { i ->
+                val item = player.getMediaItemAt(i)
+                val n = seen.merge(item.mediaId, 1, Int::plus)
+                QueueEntry(
+                    "${item.mediaId}#$n",
+                    item.mediaMetadata.title?.toString().orEmpty(),
+                    item.mediaMetadata.artist?.toString().orEmpty(),
+                    item.mediaMetadata.extras?.getString(Media.ALBUM_ID),
+                )
+            }
+        }
+        if (albumId != nowAlbumId) {
+            nowAlbumId = albumId
+            readArtColor(albumId)
+        }
+    }
+
+    private fun readArtColor(albumId: String?) {
+        viewModelScope.launch {
+            artColor = withContext(Dispatchers.IO) {
+                val file = albumId?.let { artFile(app, it) }?.takeIf { it.exists() } ?: return@withContext null
+                runCatching {
+                    val small = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 8 })
+                    val tiny = Bitmap.createScaledBitmap(small, 16, 16, true)
+                    var r = 0L
+                    var g = 0L
+                    var b = 0L
+                    for (x in 0 until 16) for (y in 0 until 16) {
+                        val p = tiny.getPixel(x, y)
+                        r += Color.red(p); g += Color.green(p); b += Color.blue(p)
+                    }
+                    Color.rgb((r / 256).toInt(), (g / 256).toInt(), (b / 256).toInt())
+                }.getOrNull()
+            }
+        }
     }
 
     override fun onCleared() {
@@ -157,7 +256,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // Navigation
 
     fun open(next: Screen) {
-        stack = stack + next
+        if (screen != next) stack = stack + next
     }
 
     fun back() {
@@ -222,6 +321,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         signedIn = false
         servers = emptyList()
         albums = emptyList()
+        artists = emptyList()
         playlists = emptyList()
         stack = listOf(Screen.Setup)
     }
@@ -243,9 +343,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         fileUrl = normalizeUrl(fileUrl)
     }
 
-    fun updateFolder(uri: Uri) { folderUri = uri.toString(); prefs.folderUri = folderUri }
+    /** Choosing a folder that an earlier install downloaded into brings those downloads back. */
+    fun updateFolder(uri: Uri) {
+        folderUri = uri.toString()
+        prefs.folderUri = folderUri
+        folderNotice = "Looking for earlier downloads in this folder."
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) { runCatching { app.store.importIndex(folderUri) }.getOrDefault(0) }
+            folderNotice = when (found) {
+                0 -> null
+                1 -> "Found 1 downloaded track in this folder."
+                else -> "Found $found downloaded tracks in this folder."
+            }
+            fetchMissingArt()
+        }
+    }
+
     fun updateQuality(v: String) { quality = v; prefs.quality = v }
-    fun updateAllowMobile(v: Boolean) { allowMobile = v; prefs.allowMobile = v }
+    fun updateAllowMobile(v: Boolean) { allowMobile = v; prefs.allowMobile = v; if (v) app.downloader.kick() }
+    fun updateTheme(v: String) { theme = v; prefs.theme = v }
+    fun updateGrid(v: Boolean) { grid = v; prefs.grid = v }
+
+    fun updateLeveling(v: Boolean) {
+        leveling = v
+        prefs.leveling = v
+        if (v) viewModelScope.launch { fillGains() }
+    }
 
     // Library
 
@@ -262,12 +385,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 albums = plex.albums()
+                artists = runCatching { plex.artists() }.getOrDefault(emptyList())
                 playlists = runCatching { plex.playlists() }.getOrDefault(emptyList())
             } catch (e: Exception) {
                 error = "Could not reach Plex, showing downloads only. ${e.message}"
+                return@launch
             } finally {
                 loading = false
             }
+            fetchMissingArt()
+            runCatching { syncPlaylists() }
+            if (leveling) fillGains()
+        }
+    }
+
+    /** After a reinstall the records come back from the folder but the artwork does not. */
+    private fun fetchMissingArt() {
+        local.value.groupBy { it.albumId }.values.map { it.first() }
+            .filter { !artFile(app, it.albumId).exists() }
+            .forEach { app.downloader.fetchArt(AlbumRef(it.albumId, it.album, it.albumArtist, it.thumb)) }
+    }
+
+    /** Tracks downloaded before leveling existed get their gain from the file service. */
+    private suspend fun fillGains() {
+        val missing = local.value.filter { it.gain == null }.map { it.id }
+        if (missing.isEmpty()) return
+        val gains = runCatching { plex.gains(missing) }.getOrNull() ?: return
+        val found = gains.filter { it.gain != null }.associate { it.id to (it.gain to it.albumGain) }
+        if (found.isNotEmpty()) withContext(Dispatchers.IO) { runCatching { app.store.setGains(found) } }
+    }
+
+    /** Playlists marked to stay in sync get their new tracks queued for download. */
+    private suspend fun syncPlaylists() {
+        for (saved in localPlaylists.value.filter { it.sync }) {
+            val items = runCatching { plex.playlistTracks(saved.id) }.getOrNull() ?: continue
+            app.store.savePlaylist(saved.copy(trackIds = items.map { it.ratingKey }))
+            enqueue(items.map { albumOf(it) to it })
         }
     }
 
@@ -290,16 +443,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val loaded = runCatching { plex.playlistTracks(playlist.id) }.getOrNull() ?: return@launch
             if (screen == target) tracks = loaded
-            // Keep a downloaded playlist's saved track list in step with the server.
-            if (localPlaylists.value.any { it.id == playlist.id }) savePlaylist(playlist, loaded)
+            // Keep a saved playlist's track list in step with the server.
+            localPlaylists.value.firstOrNull { it.id == playlist.id }?.let { saved ->
+                runCatching { app.store.savePlaylist(saved.copy(trackIds = loaded.map { it.ratingKey })) }
+            }
         }
     }
 
-    private fun savePlaylist(playlist: PlaylistRef, items: List<Item>) {
-        runCatching { app.store.savePlaylist(LocalPlaylist(playlist.id, playlist.title, items.map { it.ratingKey })) }
+    fun openArtist(name: String) {
+        if (name.isBlank()) return
+        open(Screen.Artist(name, artists.firstOrNull { it.name == name }?.thumb))
     }
 
-    private fun albumOf(item: Item): AlbumRef =
+    /** The album a track belongs to, from the library when loaded, otherwise from the track's own details. */
+    fun albumOf(item: Item): AlbumRef =
         albums.firstOrNull { it.id == item.parentRatingKey }
             ?: AlbumRef(
                 id = item.parentRatingKey ?: "unknown",
@@ -308,22 +465,97 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 thumb = item.parentThumb ?: item.thumb,
             )
 
+    fun albumTracks(albumId: String): List<LocalTrack> =
+        local.value.filter { it.albumId == albumId }.sortedWith(compareBy({ it.disc }, { it.index }))
+
+    // Downloads
+
+    private fun enqueue(pairs: List<Pair<AlbumRef, Item>>) {
+        if (pairs.isNotEmpty()) app.downloader.enqueue(pairs, quality)
+    }
+
     /** Downloads tracks from the open album or playlist. */
     fun download(source: Screen.Tracks, items: List<Item>) {
         if (items.isEmpty()) return
-        source.playlist?.let { savePlaylist(it, tracks) }
-        val label = source.album?.title ?: source.playlist?.title ?: "tracks"
-        app.downloader.enqueue(label, items.map { (source.album ?: albumOf(it)) to it }, quality)
+        source.playlist?.let { p ->
+            val saved = localPlaylists.value.firstOrNull { it.id == p.id }
+            runCatching {
+                app.store.savePlaylist(LocalPlaylist(p.id, p.title, tracks.map { it.ratingKey }, saved?.sync ?: false))
+            }
+        }
+        enqueue(items.map { (source.album ?: albumOf(it)) to it })
     }
+
+    /** Downloads a whole album without opening it. */
+    fun downloadAlbum(album: AlbumRef) {
+        viewModelScope.launch {
+            val items = runCatching { plex.tracks(album.id) }.getOrNull()
+            if (items == null) error = "Could not reach Plex to download \"${album.title}\"."
+            else enqueue(items.map { album to it })
+        }
+    }
+
+    fun removeDownloads(tracks: List<LocalTrack>) {
+        if (tracks.isNotEmpty()) app.downloader.remove(tracks)
+    }
+
+    fun setPlaylistSync(playlist: PlaylistRef, on: Boolean) {
+        val saved = localPlaylists.value.firstOrNull { it.id == playlist.id }
+        val ids = if (tracks.isNotEmpty()) tracks.map { it.ratingKey } else saved?.trackIds.orEmpty()
+        runCatching { app.store.savePlaylist(LocalPlaylist(playlist.id, playlist.title, ids, on)) }
+        if (on) enqueue(tracks.map { albumOf(it) to it })
+    }
+
+    fun pauseDownloads(paused: Boolean) = app.downloader.setPaused(paused)
+    fun cancelDownload(trackId: String) = app.downloader.cancel(trackId)
+    fun cancelAllDownloads() = app.downloader.cancelAll()
+    fun retryDownloads() = app.downloader.retryFailed()
 
     // Playback
 
-    fun play(queue: List<LocalTrack>, startIndex: Int) {
+    fun play(tracks: List<LocalTrack>, startIndex: Int) {
         val c = controller ?: return
-        if (queue.isEmpty()) return
-        c.setMediaItems(queue.map(::mediaItem), startIndex, 0L)
+        if (tracks.isEmpty()) return
+        c.setMediaItems(tracks.map { Media.item(app, it) }, startIndex.coerceIn(0, tracks.lastIndex), 0L)
         c.prepare()
         c.play()
+    }
+
+    /** Puts tracks right after the one that is playing. */
+    fun playNext(tracks: List<LocalTrack>) {
+        val c = controller ?: return
+        if (tracks.isEmpty()) return
+        if (c.mediaItemCount == 0) return play(tracks, 0)
+        c.addMediaItems(c.currentMediaItemIndex + 1, tracks.map { Media.item(app, it) })
+    }
+
+    /** Puts tracks at the end of the queue. */
+    fun addToQueue(tracks: List<LocalTrack>) {
+        val c = controller ?: return
+        if (tracks.isEmpty()) return
+        if (c.mediaItemCount == 0) return play(tracks, 0)
+        c.addMediaItems(tracks.map { Media.item(app, it) })
+    }
+
+    fun jumpTo(index: Int) {
+        controller?.let { it.seekTo(index, 0L); it.play() }
+    }
+
+    fun moveInQueue(from: Int, to: Int) {
+        if (from != to) controller?.moveMediaItem(from, to)
+    }
+
+    fun removeFromQueue(index: Int) {
+        if (index >= 0) controller?.removeMediaItem(index)
+    }
+
+    fun clearQueue() {
+        controller?.clearMediaItems()
+    }
+
+    fun seekTo(ms: Long) {
+        controller?.seekTo(ms)
+        positionMs = ms
     }
 
     fun togglePlay() {
@@ -352,26 +584,5 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 else -> Player.REPEAT_MODE_OFF
             }
         }
-    }
-
-    private fun mediaItem(t: LocalTrack): MediaItem {
-        val uri = Uri.parse(t.uri)
-        // The session loads this for the notification and lock screen. A file on
-        // the phone works with no connection.
-        val art = artFile(app, t.albumId).takeIf { it.exists() }?.let(Uri::fromFile)
-        return MediaItem.Builder()
-            .setMediaId(t.id)
-            .setUri(uri)
-            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(t.title)
-                    .setArtist(t.artist)
-                    .setAlbumTitle(t.album)
-                    .setAlbumArtist(t.albumArtist)
-                    .setArtworkUri(art)
-                    .build()
-            )
-            .build()
     }
 }
