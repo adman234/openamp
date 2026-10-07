@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
@@ -238,6 +239,61 @@ fun SetupScreen(vm: AppViewModel) {
                         Text(if (fixed) "Home (always shown)" else item.label)
                     }
                 }
+            }
+
+            Text("Music requests", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Optional. With a DroppedNeedle server you can search for music and ask for it from inside the app. " +
+                    "It arrives in your Plex library like any other album.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            UrlField(
+                value = vm.dnUrl,
+                onChange = vm::updateDnUrl,
+                onSettle = vm::settleDnUrl,
+                label = "DroppedNeedle address",
+                placeholder = "https://music.example.com",
+            )
+            if (vm.dnReady) {
+                when {
+                    vm.dnSigningIn -> Text("Finish signing in to Plex in the browser, then come back here.")
+                    vm.dnSignedIn -> {
+                        Text("Signed in to DroppedNeedle.")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { vm.open(Screen.Requests) }) { Text("Request music") }
+                            TextButton(onClick = vm::dnSignOut) { Text("Sign out") }
+                        }
+                    }
+                    else -> {
+                        Button(onClick = {
+                            vm.dnSignInPlex { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                        }) { Text("Sign in to DroppedNeedle with Plex") }
+                        Text("Or use a DroppedNeedle username and password:", style = MaterialTheme.typography.bodySmall)
+                        var username by rememberSaveable { mutableStateOf("") }
+                        var password by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedButton(
+                            onClick = { vm.dnSignInPassword(username, password) },
+                            enabled = username.isNotBlank() && password.isNotEmpty() && !vm.dnBusy,
+                        ) { Text("Sign in with password") }
+                    }
+                }
+                vm.dnError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
 
             Text("Appearance", style = MaterialTheme.typography.titleMedium)

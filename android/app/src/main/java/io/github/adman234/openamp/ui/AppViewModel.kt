@@ -18,6 +18,12 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.adman234.openamp.OpenAmpApp
 import io.github.adman234.openamp.data.AlbumRef
+import io.github.adman234.openamp.data.DnActive
+import io.github.adman234.openamp.data.DnException
+import io.github.adman234.openamp.data.DnPast
+import io.github.adman234.openamp.data.DnReleases
+import io.github.adman234.openamp.data.DnResult
+import io.github.adman234.openamp.data.DnSearch
 import io.github.adman234.openamp.data.ArtistRef
 import io.github.adman234.openamp.data.Item
 import io.github.adman234.openamp.data.LocalPlaylist
@@ -27,6 +33,7 @@ import io.github.adman234.openamp.data.Resource
 import io.github.adman234.openamp.data.artFile
 import io.github.adman234.openamp.playback.Media
 import io.github.adman234.openamp.playback.PlaybackService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -37,6 +44,12 @@ sealed interface Screen {
     data object Setup : Screen
     data object Browse : Screen
     data object Downloads : Screen
+
+    /** Search the catalogue and request music through DroppedNeedle. */
+    data object Requests : Screen
+
+    /** One catalogue artist's releases, each of which can be requested. */
+    data class RequestArtist(val id: String, val name: String) : Screen
 
     /** Every album of one home screen row, reached with "See all". */
     data class Section(val mode: BrowseMode) : Screen
@@ -138,6 +151,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var query by mutableStateOf("")
     var onlyDownloaded by mutableStateOf(false)
     var menu by mutableStateOf<MenuTarget?>(null)
+
+    // Requests through DroppedNeedle
+    var dnUrl by mutableStateOf(prefs.dnUrl)
+        private set
+    var dnSignedIn by mutableStateOf(prefs.dnToken != null && prefs.dnUrl.isNotBlank())
+        private set
+    var dnSigningIn by mutableStateOf(false)
+        private set
+    var dnBusy by mutableStateOf(false)
+        private set
+    var dnError by mutableStateOf<String?>(null)
+        private set
+    var dnNotice by mutableStateOf<String?>(null)
+        private set
+    var dnQuery by mutableStateOf("")
+    var dnResults by mutableStateOf<DnSearch?>(null)
+        private set
+    var dnReleases by mutableStateOf<DnReleases?>(null)
+        private set
+    var dnActive by mutableStateOf<List<DnActive>>(emptyList())
+        private set
+    var dnPast by mutableStateOf<List<DnPast>>(emptyList())
+        private set
+
+    /** Albums requested from this screen, so their buttons change at once. */
+    var dnRequested by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** The request page is offered once a DroppedNeedle address has been entered. */
+    val dnReady: Boolean get() = validUrl(dnUrl)
 
     var albums by mutableStateOf<List<AlbumRef>>(emptyList())
         private set
@@ -530,6 +573,152 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelDownload(trackId: String) = app.downloader.cancel(trackId)
     fun cancelAllDownloads() = app.downloader.cancelAll()
     fun retryDownloads() = app.downloader.retryFailed()
+
+    // Requests through DroppedNeedle
+
+    fun updateDnUrl(v: String) {
+        dnUrl = v
+        prefs.dnUrl = if (validUrl(v)) normalizeUrl(v) else ""
+    }
+
+    fun settleDnUrl() {
+        dnUrl = normalizeUrl(dnUrl)
+    }
+
+    private fun dnDropSession() {
+        prefs.dnToken = null
+        dnSignedIn = false
+    }
+
+    /** Runs one call to DroppedNeedle with the busy line and error text handled in one place. */
+    private fun dnRun(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            dnBusy = true
+            dnError = null
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DnException) {
+                if (e.code == 401) dnDropSession()
+                dnError = e.message
+            } catch (e: Exception) {
+                dnError = "Could not reach DroppedNeedle. ${e.message}"
+            } finally {
+                dnBusy = false
+            }
+        }
+    }
+
+    /** DroppedNeedle runs the Plex sign-in itself. The app opens the page it gives and waits for the result. */
+    fun dnSignInPlex(openBrowser: (String) -> Unit) {
+        if (dnSigningIn) return
+        dnSigningIn = true
+        dnError = null
+        viewModelScope.launch {
+            try {
+                val pin = app.dn.plexPin()
+                openBrowser(pin.authUrl)
+                repeat(150) {
+                    delay(2_000)
+                    val token = app.dn.plexPoll(pin)
+                    if (token != null) {
+                        prefs.dnToken = token
+                        dnSignedIn = true
+                        return@launch
+                    }
+                }
+                dnError = "Sign-in timed out. Try again."
+            } catch (e: DnException) {
+                dnError = if (e.code == 403) "DroppedNeedle does not allow this Plex account." else e.message
+            } catch (e: Exception) {
+                dnError = "Could not reach DroppedNeedle. ${e.message}"
+            } finally {
+                dnSigningIn = false
+            }
+        }
+    }
+
+    fun dnSignInPassword(username: String, password: String) = dnRun {
+        prefs.dnToken = app.dn.login(username.trim(), password)
+        dnSignedIn = true
+    }
+
+    fun dnSignOut() {
+        dnDropSession()
+        dnResults = null
+        dnActive = emptyList()
+        dnPast = emptyList()
+    }
+
+    fun dnSearch() {
+        val query = dnQuery.trim()
+        dnNotice = null
+        if (query.isEmpty()) {
+            dnResults = null
+            return
+        }
+        dnRun {
+            val found = app.dn.search(query)
+            dnResults = DnSearch(found.artists.distinctBy { it.id }, found.albums.distinctBy { it.id })
+        }
+    }
+
+    fun dnClearSearch() {
+        dnQuery = ""
+        dnResults = null
+        dnNotice = null
+        dnError = null
+    }
+
+    fun dnOpenArtist(id: String, name: String) {
+        dnReleases = null
+        dnNotice = null
+        open(Screen.RequestArtist(id, name))
+        dnRun { dnReleases = app.dn.releases(id) }
+    }
+
+    fun dnRequest(id: String, artist: String?, album: String?, year: Int?) = dnRun {
+        val answer = app.dn.requestAlbum(id, artist, album, year)
+        dnRequested = dnRequested + id
+        dnNotice = answer.ifBlank { "Requested." }
+        dnRefresh()
+    }
+
+    /** Fetches the request lists quietly. When a request leaves the active list, the Plex library is read again. */
+    fun dnRefresh() {
+        if (!dnSignedIn) return
+        viewModelScope.launch {
+            try {
+                val before = dnActive.mapTo(HashSet()) { it.id }
+                val active = app.dn.active().distinctBy { it.id }
+                dnActive = active
+                dnPast = app.dn.past().distinctBy { it.id }
+                val now = active.mapTo(HashSet()) { it.id }
+                if (before.any { it !in now }) loadLibrary()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DnException) {
+                if (e.code == 401) dnDropSession()
+            } catch (e: Exception) {
+                // A missed refresh is retried a few seconds later.
+            }
+        }
+    }
+
+    fun dnCancel(id: String) = dnRun {
+        app.dn.cancel(id)
+        dnRefresh()
+    }
+
+    fun dnRetry(id: String) = dnRun {
+        app.dn.retry(id)
+        dnNotice = "Trying again."
+        dnRefresh()
+    }
+
+    fun dnCover(result: DnResult, artist: Boolean = false): String? = app.dn.cover(result, artist)
+    fun dnAlbumCover(id: String?): String? = app.dn.albumCover(id)
 
     // Playback
 

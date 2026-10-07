@@ -124,6 +124,8 @@ private fun App(vm: AppViewModel) {
                         Screen.Setup -> SetupScreen(vm)
                         Screen.Browse -> BrowseScreen(vm)
                         Screen.Downloads -> DownloadsScreen(vm)
+                        Screen.Requests -> RequestScreen(vm)
+                        is Screen.RequestArtist -> RequestArtistScreen(vm, screen)
                         is Screen.Section -> SectionScreen(vm, screen)
                         is Screen.Artist -> ArtistScreen(vm, screen)
                         is Screen.Tracks -> TracksScreen(vm, screen)

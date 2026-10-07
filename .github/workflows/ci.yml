@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, requests]
   pull_request:
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
 
   image:
     needs: server
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,6 +53,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
+      # main publishes the "dev" release. Any other branch publishes its own
+      # release under its own app id, so both builds can be installed together.
+      - name: Name the build
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ] || [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "RELEASE_TAG=dev" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Development build $GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          else
+            echo "OPENAMP_VARIANT=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "RELEASE_TAG=dev-$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "RELEASE_TITLE=Test build $GITHUB_RUN_NUMBER of the $GITHUB_REF_NAME branch" >> "$GITHUB_ENV"
+          fi
       - name: Restore the signing key
         if: github.event_name == 'push'
         env:
@@ -71,11 +83,11 @@ jobs:
         with:
           name: openamp-apk
           path: openamp.apk
-      # One rolling pre-release, replaced on every push to main.
-      - name: Publish the dev release
+      # One rolling pre-release per branch, replaced on every push.
+      - name: Publish the release
         if: github.event_name == 'push' && env.OPENAMP_KEYSTORE != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete dev --cleanup-tag --yes || true
-          gh release create dev openamp.apk             --prerelease             --target "$GITHUB_SHA"             --title "Development build ${{ github.run_number }}"             --notes "Built from ${GITHUB_SHA::7}. Every build is signed with the same key, so it installs over the previous one."
+          gh release delete "$RELEASE_TAG" --cleanup-tag --yes || true
+          gh release create "$RELEASE_TAG" openamp.apk --prerelease --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "Built from ${GITHUB_SHA::7}. Every build of a branch is signed with the same key, so it installs over the previous one."

@@ -17,6 +17,11 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "0.1.$build"
+
+        // A test branch builds under its own app id and name, so it installs beside the normal app.
+        val variant = System.getenv("OPENAMP_VARIANT").orEmpty()
+        if (variant.isNotEmpty()) applicationIdSuffix = ".$variant"
+        manifestPlaceholders["appLabel"] = if (variant.isEmpty()) "OpenAmp" else "OpenAmp $variant"
     }
 
     // CI signs with one fixed key so that builds update in place. Without the
