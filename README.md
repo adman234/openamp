@@ -67,7 +67,6 @@ Next:
 
 Long term:
 
-- Sleep timer
 - Lyrics
 - Playback speed
 - Equalizer and crossfade

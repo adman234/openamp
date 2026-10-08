@@ -38,6 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 sealed interface Screen {
@@ -81,10 +82,24 @@ data class QueueEntry(val uid: String, val title: String, val artist: String, va
 
 /** Adds https:// when the scheme is missing. An address that is only a scheme counts as empty. */
 fun normalizeUrl(input: String): String {
-    val text = input.trim()
+    val text = undoubleScheme(input.trim())
     if (text.isEmpty() || text.equals("https://", true) || text.equals("http://", true)) return ""
-    return (if ("://" in text) text else "https://$text").trimEnd('/')
+    val withScheme = if ("://" in text) text else "https://$text"
+    // Only the server part is kept. An address copied from a browser often carries a page path
+    // such as /web/index.html, and every request would then go to the wrong place.
+    val parsed = withScheme.toHttpUrlOrNull() ?: return withScheme.trimEnd('/')
+    val host = if (':' in parsed.host) "[${parsed.host}]" else parsed.host
+    val port = if (parsed.port == HttpUrl.defaultPort(parsed.scheme)) "" else ":${parsed.port}"
+    return "${parsed.scheme}://$host$port"
 }
+
+private val doubledScheme = Regex("^(?:https?://)+(?=https?://)", RegexOption.IGNORE_CASE)
+
+/**
+ * An address field starts out holding "https://". Pasting a whole address after
+ * that gives "https://https://host", which reads as a server called "https".
+ */
+fun undoubleScheme(text: String): String = text.replace(doubledScheme, "")
 
 fun validUrl(input: String): Boolean {
     val url = normalizeUrl(input)
@@ -217,6 +232,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var positionMs by mutableStateOf(0L)
         private set
+
+    /** Minutes until the sleep timer pauses playback, or null when it is off. */
+    var sleepMinutesLeft by mutableStateOf<Int?>(null)
+        private set
     var durationMs by mutableStateOf(0L)
         private set
 
@@ -246,6 +265,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 controller?.let {
                     positionMs = it.currentPosition.coerceAtLeast(0)
                     durationMs = it.duration.coerceAtLeast(0)
+                }
+                sleepMinutesLeft = app.sleepTimer.endsAt.value?.let { end ->
+                    ((end - System.currentTimeMillis() + 59_999) / 60_000).toInt().coerceAtLeast(1)
                 }
                 delay(500)
             }
@@ -765,6 +787,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun seekTo(ms: Long) {
         controller?.seekTo(ms)
         positionMs = ms
+    }
+
+    /** Pauses playback after this many minutes. Null turns the timer off. */
+    fun setSleepTimer(minutes: Int?) {
+        if (minutes == null) app.sleepTimer.cancel() else app.sleepTimer.start(minutes)
+        sleepMinutesLeft = minutes
     }
 
     fun togglePlay() {

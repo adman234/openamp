@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -67,6 +68,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.max
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import io.github.adman234.openamp.R
@@ -116,8 +118,11 @@ private fun App(vm: AppViewModel) {
             val hasPlayer = vm.nowId != null
             val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             val miniHeight = MiniHeight + navBar
+            // With the keyboard open, the screen ends where the keyboard begins.
+            val keyboard = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
             Column(
-                Modifier.fillMaxSize().statusBarsPadding().padding(bottom = if (hasPlayer) miniHeight else navBar),
+                Modifier.fillMaxSize().statusBarsPadding()
+                    .padding(bottom = max(keyboard, if (hasPlayer) miniHeight else navBar)),
             ) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (val screen = vm.screen) {

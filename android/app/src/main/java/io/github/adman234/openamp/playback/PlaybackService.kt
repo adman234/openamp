@@ -151,6 +151,7 @@ class PlaybackService : MediaLibraryService() {
             override fun onEvents(player: Player, events: Player.Events) = pushWidget()
         })
         app.prefs.register(prefListener)
+        app.sleepTimer.onFire = { player.pause() }
 
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -170,6 +171,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         handler.removeCallbacks(saveTick)
         app.prefs.unregister(prefListener)
+        app.sleepTimer.onFire = null
+        app.sleepTimer.cancel()
         saveResume()
         PlayerWidget.now = null
         session?.release()

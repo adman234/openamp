@@ -83,7 +83,7 @@ private fun UrlField(
     OutlinedTextField(
         value = field,
         onValueChange = { next ->
-            val text = next.text.filterNot { it.isWhitespace() }
+            val text = undoubleScheme(next.text.filterNot { it.isWhitespace() })
             field = if (text == next.text) next else TextFieldValue(text, TextRange(text.length))
             onChange(text)
         },

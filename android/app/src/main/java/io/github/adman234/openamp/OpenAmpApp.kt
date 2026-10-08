@@ -10,6 +10,7 @@ import io.github.adman234.openamp.data.History
 import io.github.adman234.openamp.data.ResumeStore
 import io.github.adman234.openamp.data.PlexApi
 import io.github.adman234.openamp.data.Prefs
+import io.github.adman234.openamp.playback.SleepTimer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +35,8 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
         private set
     lateinit var dn: DnApi
         private set
+    lateinit var sleepTimer: SleepTimer
+        private set
     lateinit var resume: ResumeStore
         private set
 
@@ -47,6 +50,7 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             .build()
         plex = PlexApi(prefs, http)
         dn = DnApi(prefs, http)
+        sleepTimer = SleepTimer(scope)
         store = DownloadStore(this)
         history = History(filesDir)
         resume = ResumeStore(filesDir)
