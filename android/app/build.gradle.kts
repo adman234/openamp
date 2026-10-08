@@ -17,6 +17,11 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "0.1.$build"
+
+        // A test branch has the same app id as the normal build, so one installs over the
+        // other. Its version name says which branch it came from.
+        val variant = System.getenv("OPENAMP_VARIANT").orEmpty()
+        if (variant.isNotEmpty()) versionNameSuffix = "-$variant"
     }
 
     // CI signs with one fixed key so that builds update in place. Without the
