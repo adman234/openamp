@@ -6,7 +6,7 @@ An Android app that downloads music for offline listening. Plex supplies the lib
 
 Status: in development. The app browses the Plex library, downloads albums and playlists to a folder you choose, and plays them with no connection. It has a full screen player with a queue, a home screen widget, Android Auto browsing, volume leveling, and it reports plays back to Plex.
 
-Get the app from the [dev release](https://github.com/adman234/openamp/releases/tag/dev). Every build is signed with the same key, so a new one installs over the old one.
+Get the app from the [latest release](https://github.com/adman234/openamp/releases/latest). Every build is signed with the same key, so a new one installs over the old one.
 
 ## Layout
 

@@ -18,10 +18,10 @@ android {
         versionCode = build
         versionName = "0.1.$build"
 
-        // A test branch builds under its own app id and name, so it installs beside the normal app.
+        // A test branch has the same app id as the normal build, so one installs over the
+        // other. Its version name says which branch it came from.
         val variant = System.getenv("OPENAMP_VARIANT").orEmpty()
-        if (variant.isNotEmpty()) applicationIdSuffix = ".$variant"
-        manifestPlaceholders["appLabel"] = if (variant.isEmpty()) "OpenAmp" else "OpenAmp $variant"
+        if (variant.isNotEmpty()) versionNameSuffix = "-$variant"
     }
 
     // CI signs with one fixed key so that builds update in place. Without the
