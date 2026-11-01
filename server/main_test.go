@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -191,5 +194,48 @@ func TestInfo(t *testing.T) {
 	}
 	if got := out.Tracks[1]; got.ID != "2" || got.Error != "not_found" {
 		t.Errorf("track 2: %+v", got)
+	}
+}
+
+// A bad token costs one Plex request, however many ids it lists, and repeat
+// tries with it cost none.
+func TestRejectedTokenFailsFast(t *testing.T) {
+	var hits atomic.Int64
+	plex := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer plex.Close()
+	s := &server{
+		cfg:  config{plexURL: plex.URL, kbps: map[string]int{"high": 192, "medium": 128, "low": 96}},
+		plex: newPlexClient(plex.URL),
+	}
+
+	ids := make([]string, 50)
+	for i := range ids {
+		ids[i] = strconv.Itoa(i + 1)
+	}
+	target := "/v1/tracks/info?ids=" + strings.Join(ids, ",")
+
+	if rec := do(s, target, "made-up"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad token: got %d", rec.Code)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("bad token with %d ids made %d Plex requests, want 1", len(ids), n)
+	}
+	if rec := do(s, target, "made-up"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("repeat: got %d", rec.Code)
+	}
+	if rec := do(s, "/v1/tracks/7/file", "made-up"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("file with remembered token: got %d", rec.Code)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("remembered bad token still made Plex requests: %d in total", n)
+	}
+
+	// A different token is still checked with Plex.
+	do(s, "/v1/tracks/info?ids=1", "another")
+	if n := hits.Load(); n != 2 {
+		t.Fatalf("new token: %d Plex requests in total, want 2", n)
 	}
 }

@@ -71,26 +71,58 @@ type cachedTrack struct {
 // plexClient looks tracks up with the caller's own token, so a caller can
 // only reach what Plex lets them see. Answers are cached per token.
 type plexClient struct {
-	base string
-	http *http.Client
-	ttl  time.Duration
+	base      string
+	http      *http.Client
+	ttl       time.Duration
+	rejectTTL time.Duration
 
 	mu    sync.Mutex
 	cache map[string]cachedTrack
+
+	// Tokens Plex turned down recently, so repeat tries with the same bad
+	// token are refused without asking Plex again.
+	rejected map[string]time.Time
 }
+
+// maxRejected bounds the rejected-token memory. Someone sending a new
+// made-up token on every request could otherwise grow it without limit.
+const maxRejected = 10000
 
 func newPlexClient(base string) *plexClient {
 	return &plexClient{
-		base:  base,
-		http:  &http.Client{Timeout: 15 * time.Second},
-		ttl:   5 * time.Minute,
-		cache: map[string]cachedTrack{},
+		base:      base,
+		http:      &http.Client{Timeout: 15 * time.Second},
+		ttl:       5 * time.Minute,
+		rejectTTL: time.Minute,
+		cache:     map[string]cachedTrack{},
+		rejected:  map[string]time.Time{},
 	}
 }
 
-func cacheKey(token, id string) string {
+func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:]) + "/" + id
+	return hex.EncodeToString(sum[:])
+}
+
+func cacheKey(token, id string) string {
+	return tokenHash(token) + "/" + id
+}
+
+// reject remembers that Plex turned this token down.
+func (p *plexClient) reject(token string, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.rejected) >= maxRejected {
+		for k, until := range p.rejected {
+			if now.After(until) {
+				delete(p.rejected, k)
+			}
+		}
+		if len(p.rejected) >= maxRejected {
+			p.rejected = map[string]time.Time{}
+		}
+	}
+	p.rejected[tokenHash(token)] = now.Add(p.rejectTTL)
 }
 
 func (p *plexClient) lookup(ctx context.Context, token, id string) (*track, error) {
@@ -100,6 +132,10 @@ func (p *plexClient) lookup(ctx context.Context, token, id string) (*track, erro
 	key := cacheKey(token, id)
 	now := time.Now()
 	p.mu.Lock()
+	if until, ok := p.rejected[tokenHash(token)]; ok && now.Before(until) {
+		p.mu.Unlock()
+		return nil, errUnauthorized
+	}
 	if c, ok := p.cache[key]; ok && now.Before(c.expires) {
 		p.mu.Unlock()
 		return c.t, nil
@@ -118,7 +154,12 @@ func (p *plexClient) lookup(ctx context.Context, token, id string) (*track, erro
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized:
+		// 401 means the token itself is bad, so remember it. A 403 can be a
+		// good token without access to this one track, so it is not kept.
+		p.reject(token, now)
+		return nil, errUnauthorized
+	case resp.StatusCode == http.StatusForbidden:
 		return nil, errUnauthorized
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, errNotFound

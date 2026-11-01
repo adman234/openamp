@@ -264,6 +264,27 @@ type infoEntry struct {
 
 const maxInfoIDs = 500
 
+// infoFor looks up one track for handleInfo. rejected is true when Plex
+// turned the token down.
+func (s *server) infoFor(r *http.Request, id string) (e infoEntry, rejected bool) {
+	e.ID = id
+	t, _, st, err := s.locate(r, id)
+	switch {
+	case errors.Is(err, errUnauthorized):
+		return e, true
+	case errors.Is(err, errNotFound), errors.Is(err, errOutsideShare):
+		e.Error = "not_found"
+	case err != nil:
+		log.Printf("info for track %s failed: %v", id, err)
+		e.Error = "unavailable"
+	default:
+		e.Size, e.Mtime = st.Size(), st.ModTime().Unix()
+		e.Container, e.Codec, e.Bitrate = t.Container, t.Codec, t.Bitrate
+		e.Gain, e.AlbumGain = t.Gain, t.AlbumGain
+	}
+	return e, false
+}
+
 func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	var ids []string
 	for _, id := range strings.Split(r.URL.Query().Get("ids"), ",") {
@@ -283,32 +304,28 @@ func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]infoEntry, len(ids))
+	// The first track is looked up on its own. A bad token is then turned
+	// away after one Plex request instead of one for every id in the list.
 	var unauthorized bool
+	out[0], unauthorized = s.infoFor(r, ids[0])
+	if unauthorized {
+		http.Error(w, "Plex rejected the token", http.StatusUnauthorized)
+		return
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
-	for i, id := range ids {
+	for i := 1; i < len(ids); i++ {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			e := infoEntry{ID: id}
-			t, _, st, err := s.locate(r, id)
-			switch {
-			case errors.Is(err, errUnauthorized):
+			e, rejected := s.infoFor(r, ids[i])
+			if rejected {
 				mu.Lock()
 				unauthorized = true
 				mu.Unlock()
-			case errors.Is(err, errNotFound), errors.Is(err, errOutsideShare):
-				e.Error = "not_found"
-			case err != nil:
-				log.Printf("info for track %s failed: %v", id, err)
-				e.Error = "unavailable"
-			default:
-				e.Size, e.Mtime = st.Size(), st.ModTime().Unix()
-				e.Container, e.Codec, e.Bitrate = t.Container, t.Codec, t.Bitrate
-				e.Gain, e.AlbumGain = t.Gain, t.AlbumGain
 			}
 			out[i] = e
 		}()
