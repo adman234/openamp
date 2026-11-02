@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, requests]
+    branches: [main]
   pull_request:
   # Lets a branch be rebuilt by hand, which makes its build the newest one.
   workflow_dispatch:

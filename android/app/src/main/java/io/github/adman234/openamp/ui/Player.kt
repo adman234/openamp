@@ -31,6 +31,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -231,6 +233,32 @@ private fun Controls(vm: AppViewModel) {
     }
 }
 
+/** Sleep timer: pick a number of minutes, and playback pauses when they are up. */
+@Composable
+private fun SleepButton(vm: AppViewModel) {
+    var open by remember { mutableStateOf(false) }
+    val left = vm.sleepMinutesLeft
+    Box {
+        TextButton(onClick = { open = true }) {
+            Text(if (left == null) "Sleep" else "Sleep in $left min")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            listOf(15, 30, 45, 60, 90).forEach { minutes ->
+                DropdownMenuItem(
+                    text = { Text("Pause in $minutes minutes") },
+                    onClick = { vm.setSleepTimer(minutes); open = false },
+                )
+            }
+            if (left != null) {
+                DropdownMenuItem(
+                    text = { Text("Turn the timer off") },
+                    onClick = { vm.setSleepTimer(null); open = false },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun FullPlayer(
     vm: AppViewModel,
@@ -259,6 +287,7 @@ private fun FullPlayer(
                         .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 )
             }
+            SleepButton(vm)
             TextButton(onClick = onToggleQueue) {
                 Icon(painterResource(R.drawable.ic_queue_music), contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(if (showQueue) "Hide queue" else "Queue", Modifier.padding(start = 6.dp))

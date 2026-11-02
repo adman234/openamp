@@ -3,12 +3,14 @@ package io.github.adman234.openamp
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import io.github.adman234.openamp.data.DnApi
 import io.github.adman234.openamp.data.DownloadStore
 import io.github.adman234.openamp.data.Downloader
 import io.github.adman234.openamp.data.History
 import io.github.adman234.openamp.data.ResumeStore
 import io.github.adman234.openamp.data.PlexApi
 import io.github.adman234.openamp.data.Prefs
+import io.github.adman234.openamp.playback.SleepTimer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,6 +33,10 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
         private set
     lateinit var history: History
         private set
+    lateinit var dn: DnApi
+        private set
+    lateinit var sleepTimer: SleepTimer
+        private set
     lateinit var resume: ResumeStore
         private set
 
@@ -43,6 +49,8 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             .readTimeout(180, TimeUnit.SECONDS)
             .build()
         plex = PlexApi(prefs, http)
+        dn = DnApi(prefs, http)
+        sleepTimer = SleepTimer(scope)
         store = DownloadStore(this)
         history = History(filesDir)
         resume = ResumeStore(filesDir)
@@ -56,7 +64,14 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             val req = chain.request()
             val token = prefs.token
             val plexHost = prefs.plexUrl.toHttpUrlOrNull()?.host
-            if (token != null && req.url.host == plexHost) {
+            // Covers on the request page come from DroppedNeedle, which wants its own session token.
+            val dnUrl = prefs.dnUrl.toHttpUrlOrNull()
+            val dnToken = prefs.dnToken
+            if (dnToken != null && dnUrl != null && req.url.host == dnUrl.host && req.url.port == dnUrl.port &&
+                req.url.encodedPath.startsWith("/api/v1/")
+            ) {
+                chain.proceed(req.newBuilder().header("Authorization", "Bearer $dnToken").build())
+            } else if (token != null && req.url.host == plexHost) {
                 chain.proceed(req.newBuilder().header("X-Plex-Token", token).build())
             } else {
                 chain.proceed(req)

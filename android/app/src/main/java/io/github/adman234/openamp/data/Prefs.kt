@@ -81,6 +81,26 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("allowMobile", false)
         set(v) = sp.edit().putBoolean("allowMobile", v).apply()
 
+    /** Address of the DroppedNeedle server that handles music requests. Empty when not used. */
+    var dnUrl: String
+        get() = sp.getString("dnUrl", "")!!
+        set(v) = sp.edit().putString("dnUrl", v.trim().trimEnd('/')).apply()
+
+    @Volatile
+    private var cachedDnToken: String? = null
+
+    /** DroppedNeedle's session token, encrypted the same way as the Plex token. */
+    var dnToken: String?
+        get() = cachedDnToken
+            ?: sp.getString("dnToken", null)
+                ?.let { runCatching { decrypt(it) }.getOrNull() }
+                ?.also { cachedDnToken = it }
+        set(value) {
+            cachedDnToken = value
+            if (value == null) sp.edit().remove("dnToken").apply()
+            else sp.edit().putString("dnToken", encrypt(value)).apply()
+        }
+
     fun register(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
         sp.registerOnSharedPreferenceChangeListener(listener)
 

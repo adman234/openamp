@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -450,6 +451,11 @@ fun BrowseScreen(vm: AppViewModel) {
                 }
             }
             Spacer(Modifier.weight(1f))
+            if (vm.dnReady) {
+                IconButton(onClick = { vm.open(Screen.Requests) }) {
+                    Icon(Icons.Default.Add, contentDescription = "Request music")
+                }
+            }
             IconButton(onClick = { vm.open(Screen.Downloads) }) {
                 Icon(
                     painterResource(R.drawable.ic_download),
