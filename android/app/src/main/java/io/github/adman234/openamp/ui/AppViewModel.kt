@@ -18,10 +18,9 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.adman234.openamp.OpenAmpApp
 import io.github.adman234.openamp.data.AlbumRef
-import io.github.adman234.openamp.data.DnActive
 import io.github.adman234.openamp.data.DnException
-import io.github.adman234.openamp.data.DnPast
 import io.github.adman234.openamp.data.DnReleases
+import io.github.adman234.openamp.data.DnRequest
 import io.github.adman234.openamp.data.DnResult
 import io.github.adman234.openamp.data.DnSearch
 import io.github.adman234.openamp.data.ArtistRef
@@ -185,10 +184,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var dnReleases by mutableStateOf<DnReleases?>(null)
         private set
-    var dnActive by mutableStateOf<List<DnActive>>(emptyList())
+    var dnActive by mutableStateOf<List<DnRequest>>(emptyList())
         private set
-    var dnPast by mutableStateOf<List<DnPast>>(emptyList())
+    var dnPast by mutableStateOf<List<DnRequest>>(emptyList())
         private set
+    /** The error the background refresh last showed, so a later good refresh can take it away again. */
+    private var dnSyncError: String? = null
+    /** The artist whose releases are on screen, so a slow discography stops loading once the user moves on. */
+    private var dnArtistId: String? = null
 
     /** Albums requested from this screen, so their buttons change at once. */
     var dnRequested by mutableStateOf<Set<String>>(emptySet())
@@ -697,7 +700,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dnReleases = null
         dnNotice = null
         open(Screen.RequestArtist(id, name))
-        dnRun { dnReleases = app.dn.releases(id) }
+        dnArtistId = id
+        dnRun {
+            var found = app.dn.releases(id)
+            dnReleases = found
+            // DroppedNeedle hands over a big discography in pieces and says so; ask again until it is all there.
+            var tries = 0
+            while (found.warming && tries++ < 10) {
+                delay(3_000)
+                if (dnArtistId != id) return@dnRun
+                found = app.dn.releases(id)
+                dnReleases = found
+            }
+        }
     }
 
     fun dnRequest(id: String, artist: String?, album: String?, year: Int?) = dnRun {
@@ -718,23 +733,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 dnPast = app.dn.past().distinctBy { it.id }
                 val now = active.mapTo(HashSet()) { it.id }
                 if (before.any { it !in now }) loadLibrary()
+                if (dnSyncError != null && dnError == dnSyncError) dnError = null
+                dnSyncError = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DnException) {
-                if (e.code == 401) dnDropSession()
+                if (e.code == 401) {
+                    // Also what a session from DroppedNeedle v2 gets after the upgrade: everyone signs in again.
+                    dnDropSession()
+                    dnError = e.message
+                } else {
+                    dnShowSyncError(e.message)
+                }
             } catch (e: Exception) {
-                // A missed refresh is retried a few seconds later.
+                // Refreshes run every few seconds, so this stays up only while they keep failing.
+                dnShowSyncError("Could not fetch your requests. ${e.message}")
             }
         }
     }
 
-    fun dnCancel(id: String) = dnRun {
-        app.dn.cancel(id)
+    /** Shows why the request lists stopped updating, without covering an error from something the user just did. */
+    private fun dnShowSyncError(message: String?) {
+        if (dnError == null || dnError == dnSyncError) {
+            dnSyncError = message
+            dnError = message
+        }
+    }
+
+    fun dnCancel(job: DnRequest) = dnRun {
+        app.dn.cancel(job)
         dnRefresh()
     }
 
-    fun dnRetry(id: String) = dnRun {
-        app.dn.retry(id)
+    fun dnRetry(job: DnRequest) = dnRun {
+        app.dn.retry(job)
         dnNotice = "Trying again."
         dnRefresh()
     }

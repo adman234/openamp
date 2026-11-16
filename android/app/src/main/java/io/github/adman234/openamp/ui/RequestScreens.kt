@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.github.adman234.openamp.data.DnRequest
 import kotlinx.coroutines.delay
 
 private val statusWords = mapOf(
@@ -45,10 +46,26 @@ private val statusWords = mapOf(
     "imported" to "Added to the library",
     "failed" to "Failed",
     "cancelled" to "Cancelled",
+    "cancelling" to "Cancelling",
     "incomplete" to "Incomplete",
+    "rejected" to "Turned down",
+    // What a live download is doing, and why a request is held back.
+    "searching" to "Searching",
+    "awaiting_review" to "Waiting for a check",
+    "importing" to "Adding to the library",
+    "no_download_source" to "No download source set up",
+    "request_quota_full" to "Request limit reached",
+    "storage_full" to "Storage limit reached",
+    "waiting_to_start" to "Waiting to start",
 )
 
 private fun statusWord(status: String) = statusWords[status] ?: status.replace('_', ' ').replaceFirstChar { it.uppercase() }
+
+/** The most useful line for a live request: its error, why it waits, what the download is doing, or its status. */
+private fun activeDetail(job: DnRequest) =
+    job.error ?: job.waitingReason?.let(::statusWord) ?: job.taskState?.let(::statusWord) ?: statusWord(job.status)
+
+private val failedStatuses = setOf("failed", "rejected")
 
 @Composable
 private fun SectionTitle(text: String) {
@@ -186,24 +203,23 @@ fun RequestScreen(vm: AppViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Art(vm.dnAlbumCover(job.id), 48.dp)
+                    Art(vm.dnAlbumCover(job.coverId), 48.dp)
                     Column(Modifier.weight(1f)) {
-                        Text(job.album, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(job.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            listOf(job.artist, job.error ?: job.downloadStatus ?: statusWord(job.status)).filter { it.isNotBlank() }
-                                .joinToString(" · "),
+                            listOf(job.artist, activeDetail(job)).filter { it.isNotBlank() }.joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (job.error != null) MaterialTheme.colorScheme.error else muted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        // DroppedNeedle reports either a fraction or a percentage.
+                        // DroppedNeedle v3 reports a percentage, 0 to 100.
                         job.progress?.takeIf { it > 0 }?.let { p ->
-                            val fraction = (if (p > 1) p / 100 else p).toFloat().coerceIn(0f, 1f)
+                            val fraction = (p / 100).toFloat().coerceIn(0f, 1f)
                             LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                         }
                     }
-                    IconButton(onClick = { vm.dnCancel(job.id) }) { Icon(Icons.Default.Clear, contentDescription = "Cancel this request") }
+                    IconButton(onClick = { vm.dnCancel(job) }) { Icon(Icons.Default.Clear, contentDescription = "Cancel this request") }
                 }
             }
 
@@ -215,19 +231,19 @@ fun RequestScreen(vm: AppViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Art(vm.dnAlbumCover(job.id), 48.dp)
+                        Art(vm.dnAlbumCover(job.coverId), 48.dp)
                         Column(Modifier.weight(1f)) {
-                            Text(job.album, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(job.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 listOf(job.artist, statusWord(job.status)).filter { it.isNotBlank() }.joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (job.status == "failed") MaterialTheme.colorScheme.error else muted,
+                                color = if (job.status in failedStatuses) MaterialTheme.colorScheme.error else muted,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
                         if (job.status in setOf("failed", "cancelled", "incomplete")) {
-                            TextButton(onClick = { vm.dnRetry(job.id) }) { Text("Try again") }
+                            TextButton(onClick = { vm.dnRetry(job) }) { Text("Try again") }
                         }
                     }
                 }

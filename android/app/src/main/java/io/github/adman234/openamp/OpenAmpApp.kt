@@ -68,7 +68,7 @@ class OpenAmpApp : Application(), ImageLoaderFactory {
             val dnUrl = prefs.dnUrl.toHttpUrlOrNull()
             val dnToken = prefs.dnToken
             if (dnToken != null && dnUrl != null && req.url.host == dnUrl.host && req.url.port == dnUrl.port &&
-                req.url.encodedPath.startsWith("/api/v1/")
+                req.url.encodedPath.startsWith(dnUrl.encodedPath.trimEnd('/') + DnApi.API + "/")
             ) {
                 chain.proceed(req.newBuilder().header("Authorization", "Bearer $dnToken").build())
             } else if (token != null && req.url.host == plexHost) {
